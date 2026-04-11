@@ -685,6 +685,32 @@ body {
   overflow-x: auto;
   overflow-y: visible;
 }
+.word-marquee-col--side.word-marquee-col--has-img {
+  opacity: 1;
+  justify-content: center;
+  align-items: center;
+  align-self: center;
+  min-width: min(120px, 28vw);
+  max-width: min(200px, 34vw);
+}
+.word-marquee-visual {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+.word-marquee-img {
+  width: 100%;
+  max-width: 168px;
+  height: auto;
+  max-height: min(112px, 22vw);
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
 .word-marquee-col--current {
   flex: 1 1 0;
   min-width: 0;

@@ -261,10 +261,12 @@ const state = {
   energyDrainStarted: false,
   /** 起始難度：每秒能量遞減基準（1–30），連續命中可再加成 */
   drainPerSec: DRAIN_PER_SEC_DEFAULT,
-  /** 英文單字：預覽的下一題 { en, zh } */
+  /** 英文單字：預覽的下一題（含 topic、img 等） */
   nextWordItem: null,
-  /** 英文單字：剛完成的上一題（左欄只顯示英文題目） */
+  /** 英文單字：剛完成的上一題（左欄無圖時顯示「已完成」） */
   lastCompletedWord: null,
+  /** 英文單字：目前題目完整條目（供左欄附圖） */
+  currentWordItem: null,
   /** null = 全部種類；Set 為僅出選中 topic（可複選） */
   wordTopicFilters: null,
   /** 英文詞彙種類面板是否展開（<details open>） */
@@ -993,9 +995,22 @@ function normalizeWordPoolEntries(raw) {
     const zh = String(x.zh ?? "").trim();
     if (!/^[a-z]+$/.test(en) || !zh) continue;
     const topic = String(x.topic ?? "").trim() || "其他";
-    out.push({ en, zh, topic });
+    let img = String(x.img ?? "").trim();
+    if (img && (!/^[\w./-]+$/.test(img) || img.includes(".."))) img = "";
+    const row = { en, zh, topic };
+    if (img) row.img = img;
+    out.push(row);
   }
   return out;
+}
+
+/** 題目附圖 URL：`img` 優先；`國家` 預設 `images/flags/{en}.svg` */
+function getWordItemImageUrl(item) {
+  if (!item || !item.en) return "";
+  const explicit = String(item.img ?? "").trim();
+  if (explicit && /^[\w./-]+$/.test(explicit) && !explicit.includes("..")) return explicit;
+  if (item.topic === "國家") return `images/flags/${item.en}.svg`;
+  return "";
 }
 
 function normalizeBopomofoWordPoolEntries(raw) {
@@ -1173,6 +1188,21 @@ function pickWordItem(excludeEn = "") {
 }
 
 function applyWordItemToGameState(item) {
+  if (!item || !item.en) {
+    state.currentWordItem = null;
+    state.currentWordEn = "";
+    state.currentWordZh = "";
+    state.chars = [];
+    state.pos = 0;
+    state.expected = "";
+    return;
+  }
+  state.currentWordItem = {
+    en: item.en,
+    zh: item.zh,
+    topic: item.topic,
+    ...(item.img ? { img: item.img } : {}),
+  };
   state.currentWordEn = item.en;
   state.currentWordZh = item.zh;
   state.chars = [...item.en];
@@ -1187,6 +1217,17 @@ function renderWordMarqueePrevHtml(item) {
   return `<span class="word-marquee-label">已完成</span><div class="word-marquee-side-en">${item.en.toUpperCase()}</div>`;
 }
 
+/** 左欄：有目前題目附圖則顯示圖（取代「已完成」區）；否則維持已完成文字 */
+function renderWordMarqueeLeftHtml() {
+  const cur = state.currentWordItem;
+  const url = cur ? getWordItemImageUrl(cur) : "";
+  if (url) {
+    const alt = escapeHtml(cur.zh || cur.en);
+    return `<div class="word-marquee-visual"><img class="word-marquee-img" src="${escapeHtml(url)}" alt="${alt}" loading="lazy" decoding="async" /></div>`;
+  }
+  return renderWordMarqueePrevHtml(state.lastCompletedWord);
+}
+
 function renderWordMarqueeNextHtml(item) {
   if (!item || !item.en) {
     return `<span class="word-marquee-label">下一題</span><div class="word-marquee-side-en">—</div>`;
@@ -1194,8 +1235,26 @@ function renderWordMarqueeNextHtml(item) {
   return `<span class="word-marquee-label">下一題</span><div class="word-marquee-side-en">${item.en.toUpperCase()}</div>`;
 }
 
+function bindWordMarqueeImgFallback() {
+  const img = wordMarqueePanePrevEl.querySelector(".word-marquee-img");
+  if (!img) return;
+  img.addEventListener(
+    "error",
+    () => {
+      wordMarqueePanePrevEl.classList.remove("word-marquee-col--has-img");
+      wordMarqueePanePrevEl.innerHTML = renderWordMarqueePrevHtml(state.lastCompletedWord);
+    },
+    { once: true }
+  );
+}
+
 function renderWordMarqueePanes() {
-  wordMarqueePanePrevEl.innerHTML = renderWordMarqueePrevHtml(state.lastCompletedWord);
+  const imgUrl = state.currentWordItem ? getWordItemImageUrl(state.currentWordItem) : "";
+  wordMarqueePanePrevEl.classList.toggle("word-marquee-col--has-img", !!imgUrl);
+  wordMarqueePanePrevEl.innerHTML = renderWordMarqueeLeftHtml();
+  if (imgUrl) {
+    requestAnimationFrame(() => bindWordMarqueeImgFallback());
+  }
   wordMarqueePaneCurrentEl.innerHTML = `<span class="word-marquee-label word-marquee-lv-label" title="LV：目前每秒遞減；升級倒數：再幾次答對後每秒遞減+1（已封頂顯示 —）"><span class="word-marquee-lv-part">LV:<strong id="lvValueMarquee"></strong></span><span class="word-marquee-lv-part word-marquee-lv-countdown">升級倒數:<strong id="upgradeCountdownMarquee"></strong></span></span><div class="word-marquee-en">${renderProgressText(state.chars, state.pos, true)}</div><div class="word-marquee-zh">${escapeHtml(state.currentWordZh)}</div>`;
   wordMarqueePaneNextEl.innerHTML = renderWordMarqueeNextHtml(state.nextWordItem);
   updateScore();
@@ -1220,6 +1279,8 @@ function promoteWordMarqueeNextToCurrent(opts = {}) {
   const promoted = {
     en: state.nextWordItem.en,
     zh: state.nextWordItem.zh,
+    topic: state.nextWordItem.topic,
+    ...(state.nextWordItem.img ? { img: state.nextWordItem.img } : {}),
   };
   state.nextWordItem = pickWordItem(promoted.en);
   applyWordItemToGameState(promoted);
@@ -1241,10 +1302,12 @@ function nextRound() {
     targetEl.hidden = false;
     state.nextWordItem = null;
     state.lastCompletedWord = null;
+    state.currentWordItem = null;
   }
   setKeyboardMode(state.mode);
   state.currentWordEn = "";
   state.currentWordZh = "";
+  state.currentWordItem = null;
   state.bopomofoWordHan = "";
   state.bopSeqChars = [];
   seqEl.innerHTML = "";
