@@ -1,2 +1,6 @@
 # 依 docs前置準備/gitignore範本，專案再加：
 state/
+__pycache__/
+*.py[cod]
+# 本機截圖（勿提交）
+編輯截圖_*.png

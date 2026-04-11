@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" width="1200" height="900" aria-hidden="true">
+  <defs>
+    <linearGradient id="sky" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#bae6fd" stop-opacity="0.45"/>
+      <stop offset="55%" stop-color="#a5f3fc" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#99f6e4" stop-opacity="0.22"/>
+    </linearGradient>
+    <linearGradient id="blob" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#5eead4" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.08"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="900" fill="url(#sky)"/>
+  <ellipse cx="180" cy="160" rx="220" ry="180" fill="#7dd3fc" opacity="0.14"/>
+  <ellipse cx="1020" cy="220" rx="280" ry="220" fill="#2dd4bf" opacity="0.11"/>
+  <ellipse cx="620" cy="-40" rx="400" ry="200" fill="#e0f2fe" opacity="0.5"/>
+  <path fill="url(#blob)" d="M0 520 Q 280 480 520 560 T 1200 540 L 1200 900 L 0 900 Z"/>
+  <!-- uáuäaÝþ(	 -->
+  <g fill="#64748b" opacity="0.06" transform="translate(90 640)">
+    <rect x="0" y="0" width="1020" height="200" rx="14"/>
+    <g fill="#475569">
+      <rect x="24" y="28" width="56" height="52" rx="6"/>
+      <rect x="92" y="28" width="56" height="52" rx="6"/>
+      <rect x="160" y="28" width="56" height="52" rx="6"/>
+      <rect x="228" y="28" width="56" height="52" rx="6"/>
+      <rect x="296" y="28" width="56" height="52" rx="6"/>
+      <rect x="364" y="28" width="56" height="52" rx="6"/>
+      <rect x="432" y="28" width="56" height="52" rx="6"/>
+      <rect x="500" y="28" width="56" height="52" rx="6"/>
+      <rect x="568" y="28" width="56" height="52" rx="6"/>
+      <rect x="636" y="28" width="56" height="52" rx="6"/>
+      <rect x="704" y="28" width="56" height="52" rx="6"/>
+      <rect x="772" y="28" width="56" height="52" rx="6"/>
+      <rect x="840" y="28" width="56" height="52" rx="6"/>
+      <rect x="908" y="28" width="88" height="52" rx="6"/>
+      <rect x="24" y="92" width="720" height="52" rx="6"/>
+      <rect x="756" y="92" width="240" height="52" rx="6"/>
+      <rect x="24" y="156" width="88" height="52" rx="6"/>
+      <rect x="124" y="156" width="872" height="52" rx="6"/>
+    </g>
+  </g>
+</svg>

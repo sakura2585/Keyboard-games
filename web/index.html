@@ -10,7 +10,22 @@
   <main class="wrap">
     <header class="topbar">
       <h1>鍵盤小遊戲（Web）</h1>
-      <div id="score">分數：0　連續：0</div>
+      <div class="topbar-aside">
+        <div class="topbar-aside-links">
+          <button type="button" id="openScoreboardBtn" class="topbar-score-btn">紀錄表</button>
+          <a
+            class="feedback-link"
+            href="https://github.com/sakura2585/Keyboard-games/issues/new"
+            target="_blank"
+            rel="noopener noreferrer"
+          >回報與建議</a>
+        </div>
+        <div id="score" class="topbar-score-line" title="遞減為目前每秒能量遞減（含連擊加成後）；簡單英文單字模式的 LV 在跑馬中欄原「目前」處">
+          <span class="topbar-score-seg">分數：<strong id="scoreValue">0</strong></span>
+          <span class="topbar-score-seg">連續：<strong id="streakValue">0</strong></span>
+          <span class="topbar-score-seg">遞減：<strong id="drainValue">8</strong>/秒</span>
+        </div>
+      </div>
     </header>
 
     <div class="energyWrap" aria-label="能量">
@@ -21,40 +36,115 @@
 
     <div id="gameOverOverlay" class="game-over-overlay" hidden>
       <div class="game-over-card">
-        <h2 class="game-over-title">本局結束</h2>
+        <h2 id="gameOverTitle" class="game-over-title">本局結束</h2>
         <p id="gameOverFinalScore" class="game-over-score">最終分數：0</p>
+        <div class="game-over-scoreboard" aria-label="分數紀錄">
+          <div id="gameOverScoreboardTitle" class="game-over-scoreboard-title">最佳紀錄與最後一局</div>
+          <div class="game-over-scoreboard-mode">
+            <label for="scoreboardModeSelect">紀錄模式</label>
+            <select id="scoreboardModeSelect" aria-label="檢視哪一種模式的紀錄">
+              <option value="letter">英數單鍵</option>
+              <option value="english">純英文</option>
+              <option value="word">簡單英文單字</option>
+              <option value="bopomofo">注音模式</option>
+              <option value="bopomofo_word">注音拼字</option>
+            </select>
+          </div>
+          <p id="gameOverScoreboardHint" class="game-over-scoreboard-hint" hidden>
+            各模式紀錄分開儲存。排名：分數高者在前；同分依「正確」多→「錯誤」少→「連擊」高→時間新。按 Esc 或「關閉」回到遊戲。
+          </p>
+          <div class="game-over-scoreboard-scroll">
+            <table class="game-over-score-table">
+              <thead>
+                <tr>
+                  <th scope="col">時間</th>
+                  <th scope="col">分數</th>
+                  <th scope="col">正確</th>
+                  <th scope="col">錯誤</th>
+                  <th scope="col">連擊</th>
+                </tr>
+              </thead>
+              <tbody id="gameOverScoreboardBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <button type="button" id="scoreboardCloseBtn" class="game-over-btn game-over-btn-secondary" hidden>關閉</button>
         <button type="button" id="playAgainBtn" class="game-over-btn">再玩一局</button>
+        <p id="gameOverHint" class="game-over-hint">按鍵盤 <kbd class="game-over-kbd">Enter</kbd> 也可再玩一局</p>
       </div>
     </div>
 
-    <section class="modes">
-      <label><input type="radio" name="mode" value="letter" checked> 英數單鍵</label>
-      <label><input type="radio" name="mode" value="english"> 純英文</label>
-      <label><input type="radio" name="mode" value="word"> 簡單英文單字</label>
-      <label><input type="radio" name="mode" value="bopomofo"> 注音模式</label>
-      <label><input type="radio" name="mode" value="bopomofo_word"> 注音拼字</label>
-      <label><input id="keyboardToggle" type="checkbox" checked> 顯示模擬鍵盤</label>
-      <label><input id="speakToggle" type="checkbox" checked> 完成發音</label>
-      <label class="rateWrap">語速
-        <select id="speakRate">
-          <option value="0.85">慢</option>
-          <option value="1" selected>正常</option>
-          <option value="1.15">快</option>
-        </select>
-      </label>
-      <label class="rateWrap">能量遞減（點/秒）
-        <input type="number" id="drainPerSec" min="1" max="30" step="1" value="8"
-          title="每秒扣除的能量點數，數字愈大愈難" />
-      </label>
-      <button id="skipBtn" type="button">下一題（跳過）</button>
+    <section class="modes" aria-label="模式與設定">
+      <div class="modes-row modes-row--top">
+        <div class="modes-cluster modes-cluster--modes">
+          <label><input type="radio" name="mode" value="letter" checked> 英數單鍵</label>
+          <label><input type="radio" name="mode" value="english"> 純英文</label>
+          <label><input type="radio" name="mode" value="word"> 簡單英文單字</label>
+          <label><input type="radio" name="mode" value="bopomofo"> 注音模式</label>
+          <label><input type="radio" name="mode" value="bopomofo_word"> 注音拼字</label>
+        </div>
+        <div class="modes-cluster modes-cluster--kbd-group" role="group" aria-label="鍵盤與音效">
+          <label class="modes-cluster--kbd-item"><input id="keyboardToggle" type="checkbox" checked> 顯示模擬鍵盤</label>
+          <label class="modes-cluster--kbd-item"><input id="keySfxToggle" type="checkbox" checked> 按鍵音效</label>
+        </div>
+      </div>
+      <div class="modes-row modes-row--tools">
+        <div class="speak-when-group" role="group" aria-label="簡單英文單字自動發音">
+          <label class="speak-master"><input type="checkbox" id="speakAutoToggle" checked> 發音</label>
+          <div class="speak-when-sub" id="speakWhenSub">
+            <select id="speakWhenSelect" aria-label="自動發音時機">
+              <option value="onQuestion">成為題目發音</option>
+              <option value="onComplete" selected>完成題目發音</option>
+            </select>
+          </div>
+        </div>
+        <label class="rateWrap">語速
+          <select id="speakRate">
+            <option value="0.85">慢</option>
+            <option value="1" selected>正常</option>
+            <option value="1.15">快</option>
+          </select>
+        </label>
+        <label class="rateWrap rateWrap--drain">起始難度（點/秒）
+          <input type="number" id="drainPerSec" min="1" max="40" step="1" value="8"
+            title="本局開局時每秒能量遞減；連續按對每 36 鍵再 +1/秒（含起始加成上限 40/秒）。難度越高答對分數倍率越高。" />
+        </label>
+        <div class="modes-actions">
+          <button type="button" id="speakCurrentBtn" class="speak-current-btn">發音（目前題目）</button>
+          <button id="skipBtn" type="button">下一題（跳過）</button>
+        </div>
+      </div>
     </section>
 
-    <section class="targetArea">
+    <details class="word-topic-section" id="wordTopicDetails" aria-label="英文詞彙種類" hidden>
+      <summary class="word-topic-summary">
+        <span class="word-topic-summary-title">英文詞彙種類（簡單英文單字）</span>
+        <span class="word-topic-summary-meta" id="wordTopicSummaryMeta"></span>
+      </summary>
+      <div class="word-topic-panel-body">
+        <div class="word-topic-bar" id="wordTopicBar"></div>
+      </div>
+    </details>
+
+    <section class="targetArea" id="targetArea">
+      <div id="targetLvWrap" class="target-lv" aria-live="polite" title="LV：目前每秒遞減；升級倒數：再幾次答對後每秒遞減+1">
+        <div class="target-lv-row">
+          <span class="target-lv-part">LV:<strong id="lvValue">8</strong></span>
+          <span class="target-lv-part target-lv-countdown">升級倒數:<strong id="upgradeCountdownValue">—</strong></span>
+        </div>
+      </div>
+      <div id="wordMarquee" class="word-marquee" hidden>
+        <div class="word-marquee-row">
+          <div class="word-marquee-col word-marquee-col--side" id="wordMarqueePanePrev"></div>
+          <div class="word-marquee-col word-marquee-col--current" id="wordMarqueePaneCurrent"></div>
+          <div class="word-marquee-col word-marquee-col--side" id="wordMarqueePaneNext"></div>
+        </div>
+      </div>
       <div id="target" class="target">A</div>
       <p id="translate" class="translate"></p>
       <p id="hint" class="hint">請看上面，按下鍵盤對應鍵</p>
       <p id="seq" class="seq"></p>
-      <p class="tip">黃色=現在要按　綠色=剛剛按對　紅色=剛剛按錯</p>
+      <p class="tip">黃色=現在要按　綠色=剛剛按對　紅色=剛剛按錯。鍵盤底色為標準 QWERTY 盲打手指分區（空白鍵=雙手拇指區）。</p>
     </section>
 
     <section id="keyboard" class="kbd"></section>

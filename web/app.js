@@ -5,12 +5,83 @@ const KEYBOARD_ROWS = [
   "ZXCVBNM,./",
 ];
 
+/**
+ * 標準 QWERTY 盲打「每指負責鍵位」（與本模擬鍵盤字元一致）。
+ * lp/lr/lm/li = 左手 小/無/中/食；ri/rm/rr/rp = 右手 食/中/無/小；th = 空白（雙手拇指區）。
+ */
+const FINGER_BY_PHYSICAL_KEY = {
+  "1": "lp",
+  "2": "lr",
+  "3": "lm",
+  "4": "li",
+  "5": "li",
+  "6": "ri",
+  "7": "ri",
+  "8": "rm",
+  "9": "rr",
+  "0": "rp",
+  "-": "rp",
+  q: "lp",
+  w: "lr",
+  e: "lm",
+  r: "li",
+  t: "li",
+  y: "ri",
+  u: "ri",
+  i: "rm",
+  o: "rr",
+  p: "rp",
+  a: "lp",
+  s: "lr",
+  d: "lm",
+  f: "li",
+  g: "li",
+  h: "ri",
+  j: "ri",
+  k: "rm",
+  l: "rr",
+  ";": "rp",
+  z: "lp",
+  x: "lr",
+  c: "lm",
+  v: "li",
+  b: "li",
+  n: "ri",
+  m: "ri",
+  ",": "rm",
+  ".": "rr",
+  "/": "rp",
+  " ": "th",
+};
+
 const ENERGY_MAX = 100;
 const DRAIN_PER_SEC_MIN = 1;
-const DRAIN_PER_SEC_MAX = 30;
+/** 起始＋連擊加成後，每秒能量遞減上限；40 約為兒童向極限，再高容易瞬間結束 */
+const DRAIN_PER_SEC_MAX = 40;
 const DRAIN_PER_SEC_DEFAULT = 8;
+/** 連續命中此鍵數後，每秒能量遞減 +1（略拉長間隔，避免高難度下壓力暴升過快） */
+const STREAK_HITS_PER_DRAIN_PLUS_ONE = 36;
+/** 答對加分倍率：難度最低 1.0×，達 DRAIN_PER_SEC_MAX 時為此值（與即時每秒遞減線性對應） */
+const SCORE_MULT_AT_MAX = 2.5;
 const GAIN_CORRECT = 6;
 const PENALTY_WRONG = 12;
+
+const SCORE_HISTORY_KEY = "typing-game-web-score-history";
+/** 永久儲存中「最佳紀錄」保留筆數（另永遠保留「最後一局」一筆） */
+const SCORE_TOP_N = 10;
+const MODE_LABELS = {
+  letter: "英數單鍵",
+  english: "純英文",
+  word: "簡單英文單字",
+  bopomofo: "注音模式",
+  bopomofo_word: "注音拼字",
+};
+/** 與紀錄表分區一致（順序與畫面模式選項相同） */
+const SCORE_MODES = ["letter", "english", "word", "bopomofo", "bopomofo_word"];
+
+function normalizeModeKey(m) {
+  return SCORE_MODES.includes(m) ? m : "letter";
+}
 
 function clampDrainPerSec(n) {
   const x = Math.round(Number(n));
@@ -19,7 +90,53 @@ function clampDrainPerSec(n) {
 }
 
 function getDrainPerSec() {
-  return state.drainPerSec;
+  const streakBonus = Math.floor(state.streak / STREAK_HITS_PER_DRAIN_PLUS_ONE);
+  return Math.min(DRAIN_PER_SEC_MAX, state.drainPerSec + streakBonus);
+}
+
+/** 與畫面 LV、分數倍率共用：目前「每秒遞減」整數（含連擊加成後封頂） */
+function getDifficultyLv() {
+  return getDrainPerSec();
+}
+
+/** 依目前難度（即時每秒遞減）線性放大答對得分；錯誤仍不扣分 */
+function getScoreRewardMultiplier() {
+  const d = getDrainPerSec();
+  const lo = DRAIN_PER_SEC_MIN;
+  const hi = DRAIN_PER_SEC_MAX;
+  const span = hi - lo;
+  if (span <= 0) return 1;
+  const t = Math.min(1, Math.max(0, (d - lo) / span));
+  return 1 + t * (SCORE_MULT_AT_MAX - 1);
+}
+
+/**
+ * 再幾次「答對」後，每秒遞減會實際 +1（連擊跨過下一個門檻且未封頂）。
+ * 若已無法再升則回傳 null。
+ */
+function getUpgradeCountdownRemaining() {
+  const base = state.drainPerSec;
+  const h = STREAK_HITS_PER_DRAIN_PLUS_ONE;
+  const cur = getDrainPerSec();
+  const curBonus = Math.floor(state.streak / h);
+  let k = curBonus + 1;
+  for (let guard = 0; guard < 200; guard++) {
+    const drainAfter = Math.min(DRAIN_PER_SEC_MAX, base + k);
+    if (drainAfter > cur) {
+      const nextBoundary = k * h;
+      return nextBoundary - state.streak;
+    }
+    if (drainAfter >= DRAIN_PER_SEC_MAX && cur >= DRAIN_PER_SEC_MAX) {
+      return null;
+    }
+    k++;
+  }
+  return null;
+}
+
+function formatUpgradeCountdown() {
+  const n = getUpgradeCountdownRemaining();
+  return n == null ? "—" : String(n);
 }
 
 /** 內建預設（data/vocabulary.json 載入失敗或該區為空時使用） */
@@ -52,6 +169,15 @@ const DEFAULT_BOPOMOFO_WORD_POOL = [
 
 /** 執行時辭彙（由 vocabulary.json 覆寫） */
 let wordPool = [];
+/** 完整 wordPool（含 topic），篩選後寫入 wordPool */
+let wordPoolFull = [];
+/** loadPrefs 先記住，載入詞庫後再套用到 state.wordTopicFilters */
+let pendingWordTopicKeys = null;
+
+/** 本局結束遮罩出現前記錄焦點；關閉時若適用則還原（不還原遮罩內控制項） */
+let gameOverPreviousFocus = null;
+/** 由頂欄開啟「紀錄表」時記錄焦點，關閉時還原 */
+let scoreboardPanelPreviousFocus = null;
 let bopomofoWordPool = [];
 
 const BOPOMOFO_KEYMAP = {
@@ -78,18 +204,43 @@ const translateEl = document.getElementById("translate");
 const keyboardEl = document.getElementById("keyboard");
 const skipBtn = document.getElementById("skipBtn");
 const keyboardToggleEl = document.getElementById("keyboardToggle");
-const speakToggleEl = document.getElementById("speakToggle");
+const keySfxToggleEl = document.getElementById("keySfxToggle");
+const speakWhenSelectEl = document.getElementById("speakWhenSelect");
+const speakAutoToggleEl = document.getElementById("speakAutoToggle");
 const speakRateEl = document.getElementById("speakRate");
 const drainPerSecEl = document.getElementById("drainPerSec");
 const energyFillEl = document.getElementById("energyFill");
+const targetAreaEl = document.getElementById("targetArea");
 const gameOverOverlay = document.getElementById("gameOverOverlay");
 const gameOverFinalScoreEl = document.getElementById("gameOverFinalScore");
 const playAgainBtn = document.getElementById("playAgainBtn");
+const gameOverTitleEl = document.getElementById("gameOverTitle");
+const gameOverScoreboardBodyEl = document.getElementById("gameOverScoreboardBody");
+const gameOverScoreboardTitleEl = document.getElementById("gameOverScoreboardTitle");
+const gameOverScoreboardHintEl = document.getElementById("gameOverScoreboardHint");
+const gameOverHintEl = document.getElementById("gameOverHint");
+const scoreboardCloseBtn = document.getElementById("scoreboardCloseBtn");
+const openScoreboardBtn = document.getElementById("openScoreboardBtn");
+const scoreboardModeSelectEl = document.getElementById("scoreboardModeSelect");
+const wordMarqueeEl = document.getElementById("wordMarquee");
+const wordMarqueePanePrevEl = document.getElementById("wordMarqueePanePrev");
+const wordMarqueePaneCurrentEl = document.getElementById("wordMarqueePaneCurrent");
+const wordMarqueePaneNextEl = document.getElementById("wordMarqueePaneNext");
+const speakCurrentBtn = document.getElementById("speakCurrentBtn");
+const wordTopicBarEl = document.getElementById("wordTopicBar");
+const wordTopicDetailsEl = document.getElementById("wordTopicDetails");
+const wordTopicSummaryMetaEl = document.getElementById("wordTopicSummaryMeta");
 
 const state = {
   mode: "letter",
   score: 0,
   streak: 0,
+  /** 本局答對鍵次（每次判定正確 +1） */
+  correctCount: 0,
+  /** 本局答錯鍵次 */
+  wrongCount: 0,
+  /** 本局曾達到的最高連擊 */
+  streakMax: 0,
   expected: "",
   chars: [],
   pos: 0,
@@ -97,7 +248,10 @@ const state = {
   bopSeqChars: [],
   currentWordEn: "",
   currentWordZh: "",
-  speakEnabled: true,
+  /** 注音拼字：目前詞的漢字（供發音按鈕） */
+  bopomofoWordHan: "",
+  /** 簡單英文單字自動發音：off=關閉；onQuestion=成為目前題目時；onComplete=打完該字時 */
+  speakWhen: "onComplete",
   speakRate: 1,
   showKeyboard: true,
   energy: ENERGY_MAX,
@@ -105,17 +259,32 @@ const state = {
   lastEnergyTs: 0,
   /** 本局第一次按下有效鍵前，時間造成的能量遞減不開始 */
   energyDrainStarted: false,
-  /** 每秒時間造成的能量遞減（1–30） */
+  /** 起始難度：每秒能量遞減基準（1–30），連續命中可再加成 */
   drainPerSec: DRAIN_PER_SEC_DEFAULT,
+  /** 英文單字：預覽的下一題 { en, zh } */
+  nextWordItem: null,
+  /** 英文單字：剛完成的上一題（左欄只顯示英文題目） */
+  lastCompletedWord: null,
+  /** null = 全部種類；Set 為僅出選中 topic（可複選） */
+  wordTopicFilters: null,
+  /** 英文詞彙種類面板是否展開（<details open>） */
+  wordTopicPanelOpen: false,
+  /** 答對／答錯按鍵短音效（結束與破紀錄音不受此影響） */
+  sfxKeyEnabled: true,
 };
 
 function loadPrefs() {
+  pendingWordTopicKeys = null;
   try {
     const raw = localStorage.getItem("typing-game-web");
     if (!raw) return;
     const obj = JSON.parse(raw);
     if (["letter", "english", "word", "bopomofo", "bopomofo_word"].includes(obj.mode)) state.mode = obj.mode;
-    if (typeof obj.speakEnabled === "boolean") state.speakEnabled = obj.speakEnabled;
+    if (obj.speakWhen === "onQuestion" || obj.speakWhen === "onComplete" || obj.speakWhen === "off") {
+      state.speakWhen = obj.speakWhen;
+    } else if (typeof obj.speakEnabled === "boolean") {
+      state.speakWhen = obj.speakEnabled ? "onComplete" : "off";
+    }
     if (typeof obj.speakRate === "number" && obj.speakRate >= 0.5 && obj.speakRate <= 1.5) state.speakRate = obj.speakRate;
     if (typeof obj.showKeyboard === "boolean") state.showKeyboard = obj.showKeyboard;
     if (typeof obj.drainPerSec === "number") {
@@ -124,6 +293,11 @@ function loadPrefs() {
       const legacy = { easy: 4, normal: 8, hard: 14 };
       state.drainPerSec = clampDrainPerSec(legacy[obj.drainDifficulty]);
     }
+    if (Array.isArray(obj.wordTopicFilters) && obj.wordTopicFilters.length > 0) {
+      pendingWordTopicKeys = obj.wordTopicFilters.filter((x) => typeof x === "string");
+    }
+    if (typeof obj.wordTopicPanelOpen === "boolean") state.wordTopicPanelOpen = obj.wordTopicPanelOpen;
+    if (typeof obj.sfxKeyEnabled === "boolean") state.sfxKeyEnabled = obj.sfxKeyEnabled;
   } catch (_) {}
 }
 
@@ -132,10 +306,13 @@ function savePrefs() {
     "typing-game-web",
     JSON.stringify({
       mode: state.mode,
-      speakEnabled: state.speakEnabled,
+      speakWhen: state.speakWhen,
       speakRate: state.speakRate,
       showKeyboard: state.showKeyboard,
       drainPerSec: state.drainPerSec,
+      wordTopicFilters: state.wordTopicFilters == null ? null : [...state.wordTopicFilters],
+      wordTopicPanelOpen: state.wordTopicPanelOpen,
+      sfxKeyEnabled: state.sfxKeyEnabled,
     })
   );
 }
@@ -144,8 +321,407 @@ function applyKeyboardVisibility() {
   keyboardEl.hidden = !state.showKeyboard;
 }
 
+/**
+ * 排名規則（可再調整）：分數（遊戲內累積分）為主；
+ * 同分則正確較多、錯誤較少、連擊較高、時間較新者在前。
+ */
+function compareRecordsDesc(a, b) {
+  if (b.score !== a.score) return b.score - a.score;
+  if (b.correct !== a.correct) return b.correct - a.correct;
+  if (a.wrong !== b.wrong) return a.wrong - b.wrong;
+  if (b.streak !== a.streak) return b.streak - a.streak;
+  return b.ts - a.ts;
+}
+
+function migrateRecord(x) {
+  if (!x || typeof x !== "object") {
+    return { ts: Date.now(), mode: "letter", score: 0, correct: 0, wrong: 0, streak: 0 };
+  }
+  const streakVal =
+    typeof x.streak === "number"
+      ? x.streak
+      : typeof x.streakMax === "number"
+        ? x.streakMax
+        : 0;
+  return {
+    ts: typeof x.ts === "number" ? x.ts : Date.now(),
+    mode: normalizeModeKey(typeof x.mode === "string" ? x.mode : "letter"),
+    score: typeof x.score === "number" ? x.score : 0,
+    correct: typeof x.correct === "number" ? x.correct : 0,
+    wrong: typeof x.wrong === "number" ? x.wrong : 0,
+    streak: streakVal,
+  };
+}
+
+function emptyByMode() {
+  return Object.fromEntries(SCORE_MODES.map((m) => [m, { top: [], last: null }]));
+}
+
+function migrateV1RootToByMode(data) {
+  const byMode = emptyByMode();
+  let list = [];
+  if (Array.isArray(data)) {
+    list = data.map(migrateRecord);
+  } else if (data && typeof data === "object") {
+    const tops = Array.isArray(data.top) ? data.top.map(migrateRecord) : [];
+    const last = data.last != null ? migrateRecord(data.last) : null;
+    list = [...tops, last].filter(Boolean);
+  }
+  const seen = new Set();
+  const deduped = [];
+  for (const r of list) {
+    const mr = migrateRecord(r);
+    if (seen.has(mr.ts)) continue;
+    seen.add(mr.ts);
+    deduped.push(mr);
+  }
+  for (const m of SCORE_MODES) {
+    const inMode = deduped.filter((r) => r.mode === m);
+    if (inMode.length === 0) continue;
+    const byTime = [...inMode].sort((a, b) => b.ts - a.ts);
+    const last = byTime[0];
+    const sortedRank = [...inMode].sort(compareRecordsDesc);
+    byMode[m] = { top: sortedRank.slice(0, SCORE_TOP_N), last };
+  }
+  return { v: 2, byMode };
+}
+
+function loadFullScoreRoot() {
+  try {
+    const raw = localStorage.getItem(SCORE_HISTORY_KEY);
+    if (!raw) return { v: 2, byMode: emptyByMode() };
+    const data = JSON.parse(raw);
+    if (data && data.v === 2 && data.byMode && typeof data.byMode === "object") {
+      const byMode = emptyByMode();
+      for (const m of SCORE_MODES) {
+        const block = data.byMode[m];
+        if (block && typeof block === "object") {
+          const top = Array.isArray(block.top)
+            ? block.top.map(migrateRecord).sort(compareRecordsDesc).slice(0, SCORE_TOP_N)
+            : [];
+          const last = block.last != null ? migrateRecord(block.last) : null;
+          byMode[m] = { top, last };
+        }
+      }
+      return { v: 2, byMode };
+    }
+    const migrated = migrateV1RootToByMode(data);
+    saveFullScoreRoot(migrated);
+    return migrated;
+  } catch (_) {
+    return { v: 2, byMode: emptyByMode() };
+  }
+}
+
+function saveFullScoreRoot(root) {
+  try {
+    localStorage.setItem(SCORE_HISTORY_KEY, JSON.stringify(root));
+  } catch (_) {}
+}
+
+function loadScoreArchive(mode) {
+  const mk = normalizeModeKey(mode);
+  const root = loadFullScoreRoot();
+  return root.byMode[mk] ?? { top: [], last: null };
+}
+
+function saveScoreArchiveForMode(mode, archive) {
+  const root = loadFullScoreRoot();
+  const mk = normalizeModeKey(mode);
+  root.byMode[mk] = {
+    top: archive.top.map((r) => ({ ...migrateRecord(r) })),
+    last: archive.last ? { ...migrateRecord(archive.last) } : null,
+  };
+  saveFullScoreRoot(root);
+}
+
+function mergeScoreArchive(newRecord) {
+  const mr = migrateRecord(newRecord);
+  const mk = mr.mode;
+  const prev = loadScoreArchive(mk);
+  const pool = [];
+  const seen = new Set();
+  function pushUnique(r) {
+    if (!r) return;
+    const m = migrateRecord(r);
+    if (seen.has(m.ts)) return;
+    seen.add(m.ts);
+    pool.push(m);
+  }
+  for (const r of prev.top) pushUnique(r);
+  pushUnique(prev.last);
+  pushUnique(mr);
+  pool.sort(compareRecordsDesc);
+  saveScoreArchiveForMode(mk, {
+    top: pool.slice(0, SCORE_TOP_N),
+    last: migrateRecord(mr),
+  });
+}
+
+/** 合併紀錄前呼叫：本局是否為該模式「嚴格優於」原最佳（無歷史且分數>0 也算首次最佳） */
+function isNewPersonalBestBeforeMerge(mr) {
+  const migrated = migrateRecord(mr);
+  const prev = loadScoreArchive(migrated.mode);
+  const pool = [];
+  const seen = new Set();
+  function pushUnique(r) {
+    if (!r) return;
+    const m = migrateRecord(r);
+    if (seen.has(m.ts)) return;
+    seen.add(m.ts);
+    pool.push(m);
+  }
+  for (const r of prev.top) pushUnique(r);
+  pushUnique(prev.last);
+  pool.sort(compareRecordsDesc);
+  const best = pool[0];
+  if (!best) return migrated.score > 0;
+  return compareRecordsDesc(migrated, best) < 0;
+}
+
+let sfxAudioCtx = null;
+
+function getSfxAudioContext() {
+  if (sfxAudioCtx) return sfxAudioCtx;
+  try {
+    sfxAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch (_) {
+    return null;
+  }
+  return sfxAudioCtx;
+}
+
+function resumeSfxContext(ctx) {
+  if (ctx && ctx.state === "suspended") {
+    ctx.resume().catch(() => {});
+  }
+}
+
+function sfxPlayTone(ctx, freq, startTime, duration, type = "sine", peakGain = 0.12) {
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, startTime);
+  g.gain.setValueAtTime(0, startTime);
+  g.gain.linearRampToValueAtTime(peakGain, startTime + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0008, startTime + duration);
+  osc.connect(g);
+  g.connect(ctx.destination);
+  osc.start(startTime);
+  osc.stop(startTime + duration + 0.06);
+}
+
+/** 本局結束：略低沉收尾 */
+function playSfxGameOver() {
+  if (document.visibilityState !== "visible") return;
+  const ctx = getSfxAudioContext();
+  if (!ctx) return;
+  resumeSfxContext(ctx);
+  const t0 = ctx.currentTime;
+  sfxPlayTone(ctx, 220, t0, 0.14, "triangle", 0.1);
+  sfxPlayTone(ctx, 165, t0 + 0.11, 0.18, "triangle", 0.085);
+  sfxPlayTone(ctx, 110, t0 + 0.26, 0.32, "sine", 0.075);
+}
+
+/** 該模式新最佳：短琶音 */
+function playSfxNewRecord() {
+  if (document.visibilityState !== "visible") return;
+  const ctx = getSfxAudioContext();
+  if (!ctx) return;
+  resumeSfxContext(ctx);
+  const t0 = ctx.currentTime;
+  const freqs = [523.25, 659.25, 783.99, 1046.5];
+  freqs.forEach((f, i) => {
+    sfxPlayTone(ctx, f, t0 + i * 0.1, 0.16, "sine", 0.1);
+  });
+}
+
+/** 單鍵答對：短高音 */
+function playSfxKeyCorrect() {
+  if (!state.sfxKeyEnabled) return;
+  if (document.visibilityState !== "visible") return;
+  const ctx = getSfxAudioContext();
+  if (!ctx) return;
+  resumeSfxContext(ctx);
+  const t0 = ctx.currentTime;
+  sfxPlayTone(ctx, 880, t0, 0.042, "sine", 0.065);
+}
+
+/** 單鍵答錯：兩段略降調 */
+function playSfxKeyWrong() {
+  if (!state.sfxKeyEnabled) return;
+  if (document.visibilityState !== "visible") return;
+  const ctx = getSfxAudioContext();
+  if (!ctx) return;
+  resumeSfxContext(ctx);
+  const t0 = ctx.currentTime;
+  sfxPlayTone(ctx, 200, t0, 0.055, "triangle", 0.06);
+  sfxPlayTone(ctx, 145, t0 + 0.048, 0.075, "triangle", 0.05);
+}
+
+function formatScoreWhen(ts) {
+  return new Date(ts).toLocaleString("zh-TW", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function appendScoreRow(tbody, e, highlight) {
+  const tr = document.createElement("tr");
+  if (highlight) tr.classList.add("game-over-score-row--latest");
+  const tdWhen = document.createElement("td");
+  tdWhen.className = "game-over-score-when";
+  tdWhen.textContent = formatScoreWhen(e.ts);
+  const tdScore = document.createElement("td");
+  tdScore.className = "game-over-score-num";
+  tdScore.textContent = String(e.score);
+  const tdCor = document.createElement("td");
+  tdCor.className = "game-over-score-int";
+  tdCor.textContent = String(e.correct);
+  const tdWr = document.createElement("td");
+  tdWr.className = "game-over-score-int";
+  tdWr.textContent = String(e.wrong);
+  const tdSt = document.createElement("td");
+  tdSt.className = "game-over-score-int";
+  tdSt.textContent = String(e.streak);
+  tr.append(tdWhen, tdScore, tdCor, tdWr, tdSt);
+  tbody.appendChild(tr);
+}
+
+function updateScoreboardTitles(modeKey) {
+  const mk = normalizeModeKey(modeKey);
+  const label = MODE_LABELS[mk] ?? mk;
+  if (!gameOverScoreboardTitleEl) return;
+  if (gameOverOverlay.classList.contains("game-over-overlay--records")) {
+    gameOverScoreboardTitleEl.textContent = `「${label}」紀錄表`;
+  } else {
+    gameOverScoreboardTitleEl.textContent = `「${label}」最佳紀錄與最後一局`;
+  }
+}
+
+function renderGameOverScoreboard(highlightTs = null, modeKey = null) {
+  if (!gameOverScoreboardBodyEl) return;
+  const mk = normalizeModeKey(modeKey != null ? modeKey : state.mode);
+  if (scoreboardModeSelectEl) scoreboardModeSelectEl.value = mk;
+  updateScoreboardTitles(mk);
+  gameOverScoreboardBodyEl.replaceChildren();
+  const { top, last } = loadScoreArchive(mk);
+  if (top.length === 0 && last == null) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.className = "game-over-score-empty";
+    td.textContent = "此模式尚無紀錄（該模式玩一局並結束後會寫入）";
+    tr.appendChild(td);
+    gameOverScoreboardBodyEl.appendChild(tr);
+    return;
+  }
+  if (top.length) {
+    const trSec = document.createElement("tr");
+    trSec.className = "game-over-score-section";
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.textContent = `最佳紀錄（${top.length} 筆）`;
+    trSec.appendChild(td);
+    gameOverScoreboardBodyEl.appendChild(trSec);
+    for (const e of top) {
+      appendScoreRow(gameOverScoreboardBodyEl, e, highlightTs != null && e.ts === highlightTs);
+    }
+  }
+  if (last != null && !top.some((r) => r.ts === last.ts)) {
+    const trSec = document.createElement("tr");
+    trSec.className = "game-over-score-section";
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.textContent = "最後一局";
+    trSec.appendChild(td);
+    gameOverScoreboardBodyEl.appendChild(trSec);
+    appendScoreRow(gameOverScoreboardBodyEl, last, highlightTs != null && last.ts === highlightTs);
+  }
+}
+
+function applyGameOverEndedLayout() {
+  gameOverOverlay.classList.remove("game-over-overlay--records");
+  if (gameOverTitleEl) gameOverTitleEl.textContent = "本局結束";
+  if (gameOverScoreboardTitleEl) updateScoreboardTitles(state.mode);
+  if (gameOverScoreboardHintEl) gameOverScoreboardHintEl.hidden = true;
+  if (gameOverFinalScoreEl) gameOverFinalScoreEl.hidden = false;
+  if (playAgainBtn) playAgainBtn.hidden = false;
+  if (gameOverHintEl) gameOverHintEl.hidden = false;
+  if (scoreboardCloseBtn) scoreboardCloseBtn.hidden = true;
+}
+
+function applyScoreboardRecordsLayout() {
+  gameOverOverlay.classList.add("game-over-overlay--records");
+  if (gameOverTitleEl) gameOverTitleEl.textContent = "分數紀錄";
+  if (gameOverScoreboardHintEl) gameOverScoreboardHintEl.hidden = false;
+  if (gameOverFinalScoreEl) gameOverFinalScoreEl.hidden = true;
+  if (playAgainBtn) playAgainBtn.hidden = true;
+  if (gameOverHintEl) gameOverHintEl.hidden = true;
+  if (scoreboardCloseBtn) scoreboardCloseBtn.hidden = false;
+}
+
+function openScoreboardPanel() {
+  scoreboardPanelPreviousFocus = document.activeElement;
+  applyScoreboardRecordsLayout();
+  renderGameOverScoreboard(null, state.mode);
+  gameOverOverlay.hidden = false;
+  requestAnimationFrame(() => {
+    try {
+      scoreboardCloseBtn?.focus({ preventScroll: true });
+    } catch (_) {}
+  });
+}
+
+function closeScoreboardPanel() {
+  gameOverOverlay.hidden = true;
+  applyGameOverEndedLayout();
+  const p = scoreboardPanelPreviousFocus;
+  scoreboardPanelPreviousFocus = null;
+  if (p instanceof HTMLElement && p.isConnected && !gameOverOverlay.contains(p)) {
+    try {
+      p.focus({ preventScroll: true });
+    } catch (_) {}
+  }
+}
+
+function isScoreboardRecordsView() {
+  return !gameOverOverlay.hidden && gameOverOverlay.classList.contains("game-over-overlay--records");
+}
+
+function syncLvWrapVisibility() {
+  const wrap = document.getElementById("targetLvWrap");
+  if (!wrap) return;
+  const lvInMarquee =
+    state.mode === "word" && wordMarqueeEl && !wordMarqueeEl.hidden;
+  wrap.hidden = lvInMarquee;
+}
+
 function updateScore() {
-  scoreEl.textContent = `分數：${state.score}　連續：${state.streak}`;
+  const drain = getDrainPerSec();
+  const lv = getDifficultyLv();
+  const sv = document.getElementById("scoreValue");
+  const stv = document.getElementById("streakValue");
+  const lvv = document.getElementById("lvValue");
+  const lvm = document.getElementById("lvValueMarquee");
+  const ucv = document.getElementById("upgradeCountdownValue");
+  const ucm = document.getElementById("upgradeCountdownMarquee");
+  const dv = document.getElementById("drainValue");
+  const cd = formatUpgradeCountdown();
+  if (sv) sv.textContent = String(state.score);
+  if (stv) stv.textContent = String(state.streak);
+  if (lvv) lvv.textContent = String(lv);
+  if (lvm) lvm.textContent = String(lv);
+  if (ucv) ucv.textContent = cd;
+  if (ucm) ucm.textContent = cd;
+  if (dv) dv.textContent = String(drain);
+  syncLvWrapVisibility();
+  if (!sv) {
+    scoreEl.textContent = `分數：${state.score}　連續：${state.streak}　遞減：${drain}/秒`;
+  }
 }
 
 function updateEnergyBar() {
@@ -155,6 +731,31 @@ function updateEnergyBar() {
   energyFillEl.classList.toggle("energy-critical", pct < 15);
 }
 
+let targetAreaAnimTimer = 0;
+let energyFillBumpTimer = 0;
+
+function pulseTargetArea(kind) {
+  if (!targetAreaEl) return;
+  targetAreaEl.classList.remove("anim-target-ok", "anim-target-bad");
+  void targetAreaEl.offsetWidth;
+  targetAreaEl.classList.add(kind === "ok" ? "anim-target-ok" : "anim-target-bad");
+  window.clearTimeout(targetAreaAnimTimer);
+  targetAreaAnimTimer = window.setTimeout(() => {
+    targetAreaEl.classList.remove("anim-target-ok", "anim-target-bad");
+  }, 450);
+}
+
+function pulseEnergyFill(direction) {
+  if (!energyFillEl) return;
+  energyFillEl.classList.remove("anim-energy-up", "anim-energy-down");
+  void energyFillEl.offsetWidth;
+  energyFillEl.classList.add(direction === "up" ? "anim-energy-up" : "anim-energy-down");
+  window.clearTimeout(energyFillBumpTimer);
+  energyFillBumpTimer = window.setTimeout(() => {
+    energyFillEl.classList.remove("anim-energy-up", "anim-energy-down");
+  }, 500);
+}
+
 function beginFreshRun() {
   state.gameOver = false;
   state.energy = ENERGY_MAX;
@@ -162,9 +763,20 @@ function beginFreshRun() {
   state.energyDrainStarted = false;
   state.score = 0;
   state.streak = 0;
+  state.correctCount = 0;
+  state.wrongCount = 0;
+  state.streakMax = 0;
   updateScore();
   updateEnergyBar();
+  applyGameOverEndedLayout();
   gameOverOverlay.hidden = true;
+  const prev = gameOverPreviousFocus;
+  gameOverPreviousFocus = null;
+  if (prev instanceof HTMLElement && prev.isConnected && !gameOverOverlay.contains(prev)) {
+    try {
+      prev.focus({ preventScroll: true });
+    } catch (_) {}
+  }
 }
 
 function endRun() {
@@ -172,8 +784,30 @@ function endRun() {
   state.gameOver = true;
   state.expected = "";
   resetKeyColors();
+  const rec = {
+    ts: Date.now(),
+    mode: state.mode,
+    score: state.score,
+    correct: state.correctCount,
+    wrong: state.wrongCount,
+    streak: state.streakMax,
+  };
+  const brokeRecord = isNewPersonalBestBeforeMerge(rec);
+  mergeScoreArchive(rec);
+  playSfxGameOver();
+  if (brokeRecord) {
+    window.setTimeout(() => playSfxNewRecord(), 400);
+  }
+  applyGameOverEndedLayout();
   gameOverFinalScoreEl.textContent = `最終分數：${state.score}`;
+  renderGameOverScoreboard(rec.ts, state.mode);
+  gameOverPreviousFocus = document.activeElement;
   gameOverOverlay.hidden = false;
+  requestAnimationFrame(() => {
+    try {
+      playAgainBtn.focus({ preventScroll: true });
+    } catch (_) {}
+  });
 }
 
 function startNewRun() {
@@ -211,7 +845,12 @@ function buildKeyboard() {
     for (const ch of rowText) {
       const key = document.createElement("div");
       key.className = "key";
-      key.dataset.key = ch.toLowerCase();
+      const low = ch.toLowerCase();
+      key.dataset.key = low;
+      const finger = FINGER_BY_PHYSICAL_KEY[low];
+      if (finger) key.dataset.finger = finger;
+      if (low === "f") key.id = "key-cap-f";
+      else if (low === "j") key.id = "key-cap-j";
       key.innerHTML = `<div class="main">${ch}</div><div class="sub"></div>`;
       row.appendChild(key);
       state.keys.set(ch.toLowerCase(), key);
@@ -228,6 +867,7 @@ function buildKeyboard() {
   const space = document.createElement("div");
   space.className = "key key-space";
   space.dataset.key = " ";
+  space.dataset.finger = "th";
   space.innerHTML = `<div class="main">Space</div><div class="sub">空白</div>`;
   const rightSp = document.createElement("div");
   rightSp.className = "kbd-spacer";
@@ -283,15 +923,41 @@ function randomFrom(str) {
   return str[Math.floor(Math.random() * str.length)];
 }
 
-function speakWord(text) {
-  if (!state.speakEnabled || !text || typeof window.speechSynthesis === "undefined") return;
+function speakUtterance(text, lang = "en-US") {
+  if (!text || typeof window.speechSynthesis === "undefined") return;
   const utter = new SpeechSynthesisUtterance(text);
-  utter.lang = "en-US";
+  utter.lang = lang;
   utter.rate = state.speakRate;
   try {
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utter);
   } catch (_) {}
+}
+
+/** 手動「發音（目前題目）」按鈕：不受「發音」主開關與自動時機影響 */
+function speakCurrentQuestion() {
+  if (state.gameOver || !state.expected) return;
+  switch (state.mode) {
+    case "word":
+      if (state.currentWordEn) speakUtterance(state.currentWordEn, "en-US");
+      break;
+    case "english":
+      speakUtterance(String(state.expected || "").toUpperCase(), "en-US");
+      break;
+    case "letter":
+      speakUtterance(String(state.chars[state.pos] ?? state.expected), "en-US");
+      break;
+    case "bopomofo": {
+      const sym = state.chars[state.pos] ?? state.chars[0];
+      if (sym) speakUtterance(sym, "zh-TW");
+      break;
+    }
+    case "bopomofo_word":
+      if (state.bopomofoWordHan) speakUtterance(state.bopomofoWordHan, "zh-TW");
+      break;
+    default:
+      break;
+  }
 }
 
 function parseBopomofoKeys(bopText) {
@@ -326,7 +992,8 @@ function normalizeWordPoolEntries(raw) {
     const en = String(x.en ?? "").trim().toLowerCase();
     const zh = String(x.zh ?? "").trim();
     if (!/^[a-z]+$/.test(en) || !zh) continue;
-    out.push({ en, zh });
+    const topic = String(x.topic ?? "").trim() || "其他";
+    out.push({ en, zh, topic });
   }
   return out;
 }
@@ -346,8 +1013,122 @@ function normalizeBopomofoWordPoolEntries(raw) {
   return out;
 }
 
+function applyWordTopicFilter() {
+  if (!wordPoolFull.length) {
+    wordPool = [];
+    return;
+  }
+  if (state.wordTopicFilters == null) {
+    wordPool = wordPoolFull.map((o) => ({ ...o }));
+    return;
+  }
+  const filtered = wordPoolFull.filter((x) => state.wordTopicFilters.has(x.topic));
+  const use = filtered.length ? filtered : wordPoolFull;
+  wordPool = use.map((o) => ({ ...o }));
+}
+
+function syncWordTopicSummaryMeta() {
+  if (!wordTopicSummaryMetaEl) return;
+  if (state.wordTopicFilters == null) {
+    wordTopicSummaryMetaEl.textContent = "全部";
+  } else {
+    wordTopicSummaryMetaEl.textContent = `已選 ${state.wordTopicFilters.size} 種`;
+  }
+}
+
+function updateWordTopicSectionVisibility() {
+  if (!wordTopicDetailsEl) return;
+  wordTopicDetailsEl.hidden = state.mode !== "word";
+}
+
+function finishWordTopicHydration() {
+  if (!pendingWordTopicKeys || pendingWordTopicKeys.length === 0) {
+    state.wordTopicFilters = null;
+  } else if (wordPoolFull.length) {
+    const valid = new Set(wordPoolFull.map((x) => x.topic));
+    const s = new Set(pendingWordTopicKeys.filter((t) => valid.has(t)));
+    state.wordTopicFilters = s.size ? s : null;
+  } else {
+    state.wordTopicFilters = null;
+  }
+  pendingWordTopicKeys = null;
+  applyWordTopicFilter();
+  syncWordTopicSummaryMeta();
+}
+
+function syncWordTopicButtonStyles() {
+  if (!wordTopicBarEl) return;
+  wordTopicBarEl.querySelectorAll(".topic-btn").forEach((btn) => {
+    btn.classList.remove("topic-btn--on");
+  });
+  if (state.wordTopicFilters == null) {
+    wordTopicBarEl.querySelector(".topic-btn--all")?.classList.add("topic-btn--on");
+  } else {
+    wordTopicBarEl.querySelectorAll(".topic-btn[data-topic]").forEach((btn) => {
+      if (state.wordTopicFilters.has(btn.dataset.topic)) btn.classList.add("topic-btn--on");
+    });
+  }
+  syncWordTopicSummaryMeta();
+}
+
+function onWordTopicFilterChanged() {
+  applyWordTopicFilter();
+  savePrefs();
+  if (state.mode === "word" && !state.gameOver) {
+    nextRound();
+  }
+}
+
+function onWordTopicBarClick(ev) {
+  const btn = ev.target.closest(".topic-btn");
+  if (!btn || !wordTopicBarEl.contains(btn)) return;
+  if (btn.dataset.role === "all") {
+    state.wordTopicFilters = null;
+  } else if (btn.dataset.topic) {
+    const t = btn.dataset.topic;
+    if (state.wordTopicFilters == null) {
+      state.wordTopicFilters = new Set([t]);
+    } else {
+      if (state.wordTopicFilters.has(t)) state.wordTopicFilters.delete(t);
+      else state.wordTopicFilters.add(t);
+      if (state.wordTopicFilters.size === 0) state.wordTopicFilters = null;
+    }
+  }
+  syncWordTopicButtonStyles();
+  onWordTopicFilterChanged();
+}
+
+if (wordTopicBarEl) {
+  wordTopicBarEl.addEventListener("click", onWordTopicBarClick);
+}
+
+function buildWordTopicBar() {
+  if (!wordTopicBarEl) return;
+  wordTopicBarEl.replaceChildren();
+  const allBtn = document.createElement("button");
+  allBtn.type = "button";
+  allBtn.className = "topic-btn topic-btn--all";
+  allBtn.textContent = "全部";
+  allBtn.dataset.role = "all";
+  wordTopicBarEl.appendChild(allBtn);
+
+  const topics = [...new Set(wordPoolFull.map((x) => x.topic))].sort((a, b) =>
+    a.localeCompare(b, "zh-Hant")
+  );
+  for (const t of topics) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "topic-btn";
+    b.textContent = t;
+    b.dataset.topic = t;
+    wordTopicBarEl.appendChild(b);
+  }
+
+  syncWordTopicButtonStyles();
+}
+
 async function loadVocabulary() {
-  const fbW = DEFAULT_WORD_POOL.map((o) => ({ ...o }));
+  const fbW = normalizeWordPoolEntries(DEFAULT_WORD_POOL.map((o) => ({ ...o })));
   const fbB = DEFAULT_BOPOMOFO_WORD_POOL.map((o) => ({ ...o }));
   try {
     const res = await fetch("data/vocabulary.json", { cache: "no-store" });
@@ -355,10 +1136,12 @@ async function loadVocabulary() {
     const data = await res.json();
     const w = normalizeWordPoolEntries(data.wordPool);
     const b = normalizeBopomofoWordPoolEntries(data.bopomofoWordPool);
-    wordPool = w.length ? w : fbW;
+    wordPoolFull = w.length ? w : fbW;
+    finishWordTopicHydration();
     bopomofoWordPool = b.length ? b : fbB;
   } catch (_) {
-    wordPool = fbW;
+    wordPoolFull = fbW;
+    finishWordTopicHydration();
     bopomofoWordPool = fbB;
   }
 }
@@ -371,17 +1154,106 @@ function renderProgressText(chars, pos, upper = false) {
   return `<span class="done">${doneText}</span><span class="pending">${pendingText}</span>`;
 }
 
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function pickWordItem(excludeEn = "") {
+  if (!wordPool.length) return null;
+  if (wordPool.length === 1) return wordPool[0];
+  for (let i = 0; i < 80; i++) {
+    const item = wordPool[Math.floor(Math.random() * wordPool.length)];
+    if (item.en !== excludeEn) return item;
+  }
+  return wordPool[0];
+}
+
+function applyWordItemToGameState(item) {
+  state.currentWordEn = item.en;
+  state.currentWordZh = item.zh;
+  state.chars = [...item.en];
+  state.pos = 0;
+  state.expected = state.chars[0].toLowerCase();
+}
+
+function renderWordMarqueePrevHtml(item) {
+  if (!item || !item.en) {
+    return `<span class="word-marquee-label">已完成</span><div class="word-marquee-side-en">—</div>`;
+  }
+  return `<span class="word-marquee-label">已完成</span><div class="word-marquee-side-en">${item.en.toUpperCase()}</div>`;
+}
+
+function renderWordMarqueeNextHtml(item) {
+  if (!item || !item.en) {
+    return `<span class="word-marquee-label">下一題</span><div class="word-marquee-side-en">—</div>`;
+  }
+  return `<span class="word-marquee-label">下一題</span><div class="word-marquee-side-en">${item.en.toUpperCase()}</div>`;
+}
+
+function renderWordMarqueePanes() {
+  wordMarqueePanePrevEl.innerHTML = renderWordMarqueePrevHtml(state.lastCompletedWord);
+  wordMarqueePaneCurrentEl.innerHTML = `<span class="word-marquee-label word-marquee-lv-label" title="LV：目前每秒遞減；升級倒數：再幾次答對後每秒遞減+1（已封頂顯示 —）"><span class="word-marquee-lv-part">LV:<strong id="lvValueMarquee"></strong></span><span class="word-marquee-lv-part word-marquee-lv-countdown">升級倒數:<strong id="upgradeCountdownMarquee"></strong></span></span><div class="word-marquee-en">${renderProgressText(state.chars, state.pos, true)}</div><div class="word-marquee-zh">${escapeHtml(state.currentWordZh)}</div>`;
+  wordMarqueePaneNextEl.innerHTML = renderWordMarqueeNextHtml(state.nextWordItem);
+  updateScore();
+}
+
+function updateWordMarqueeTypingDisplay() {
+  const wrap = wordMarqueePaneCurrentEl.querySelector(".word-marquee-en");
+  if (wrap) wrap.innerHTML = renderProgressText(state.chars, state.pos, true);
+}
+
+/**
+ * 將右欄「下一題」原樣設為「目前」；只對新的「下一題」隨機抽選。
+ * @param {object} opts
+ * @param {boolean} [opts.recordCurrentAsCompleted=true] 是否把當前題記入左欄「已完成」（答完單字用 true；跳過未完成題用 false）
+ */
+function promoteWordMarqueeNextToCurrent(opts = {}) {
+  const recordCurrentAsCompleted = opts.recordCurrentAsCompleted !== false;
+  if (!state.nextWordItem) return false;
+  if (recordCurrentAsCompleted && state.currentWordEn) {
+    state.lastCompletedWord = { en: state.currentWordEn, zh: state.currentWordZh };
+  }
+  const promoted = {
+    en: state.nextWordItem.en,
+    zh: state.nextWordItem.zh,
+  };
+  state.nextWordItem = pickWordItem(promoted.en);
+  applyWordItemToGameState(promoted);
+  renderWordMarqueePanes();
+  paintKeys(state.expected);
+  hintEl.textContent = `逐字打出單字，現在請按：「${state.expected.toUpperCase()}」`;
+  if (state.speakWhen === "onQuestion" && state.currentWordEn) speakUtterance(state.currentWordEn, "en-US");
+  return true;
+}
+
+function wordMarqueeAdvanceToNext() {
+  promoteWordMarqueeNextToCurrent({ recordCurrentAsCompleted: true });
+}
+
 function nextRound() {
   if (state.gameOver) return;
+  if (state.mode !== "word") {
+    wordMarqueeEl.hidden = true;
+    targetEl.hidden = false;
+    state.nextWordItem = null;
+    state.lastCompletedWord = null;
+  }
   setKeyboardMode(state.mode);
   state.currentWordEn = "";
   state.currentWordZh = "";
+  state.bopomofoWordHan = "";
   state.bopSeqChars = [];
   seqEl.innerHTML = "";
   translateEl.textContent = "";
 
   if (state.mode === "word") {
     if (!wordPool.length) {
+      wordMarqueeEl.hidden = true;
+      targetEl.hidden = false;
       const c = randomFrom("abcdefghijklmnopqrstuvwxyz0123456789");
       state.chars = [c];
       state.pos = 0;
@@ -390,15 +1262,18 @@ function nextRound() {
       hintEl.textContent = "英文辭彙庫為空，請檢查 data/vocabulary.json 的 wordPool";
       return;
     }
-    const item = wordPool[Math.floor(Math.random() * wordPool.length)];
-    state.currentWordEn = item.en;
-    state.currentWordZh = item.zh;
-    state.chars = [...item.en];
-    state.pos = 0;
-    state.expected = state.chars[0].toLowerCase();
-    targetEl.innerHTML = renderProgressText(state.chars, state.pos, true);
-    translateEl.textContent = item.zh;
+    wordMarqueeEl.hidden = false;
+    targetEl.hidden = true;
+    translateEl.textContent = "";
+    state.lastCompletedWord = null;
+    const cur = pickWordItem();
+    applyWordItemToGameState(cur);
+    state.nextWordItem = pickWordItem(cur.en);
+    renderWordMarqueePanes();
     hintEl.textContent = `逐字打出單字，現在請按：「${state.expected.toUpperCase()}」`;
+    paintKeys(state.expected);
+    if (state.speakWhen === "onQuestion" && state.currentWordEn) speakUtterance(state.currentWordEn, "en-US");
+    return;
   } else if (state.mode === "bopomofo_word") {
     if (!bopomofoWordPool.length) {
       const c = randomFrom("abcdefghijklmnopqrstuvwxyz");
@@ -414,6 +1289,7 @@ function nextRound() {
     const item = bopomofoWordPool[Math.floor(Math.random() * bopomofoWordPool.length)];
     const seq = parseBopomofoKeys(item.bop);
     if (!seq.keys.length) {
+      state.bopomofoWordHan = "";
       state.chars = ["a"];
       state.pos = 0;
       state.expected = "a";
@@ -424,6 +1300,7 @@ function nextRound() {
       state.chars = seq.keys;
       state.pos = 0;
       state.expected = state.chars[0];
+      state.bopomofoWordHan = item.han;
       targetEl.textContent = item.han;
       translateEl.textContent = item.bop;
       hintEl.textContent = `注音拼字：請依序打出「${item.han}」的注音鍵`;
@@ -462,11 +1339,19 @@ function nextRound() {
 function onModeChange(mode) {
   state.mode = mode;
   savePrefs();
+  updateWordTopicSectionVisibility();
   beginFreshRun();
   nextRound();
 }
 
 function onKeyDown(ev) {
+  if (isScoreboardRecordsView()) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeScoreboardPanel();
+    }
+    return;
+  }
   if (state.gameOver) {
     if (ev.key === "Enter") {
       ev.preventDefault();
@@ -485,17 +1370,24 @@ function onKeyDown(ev) {
   }
 
   if (k === state.expected) {
-    state.score += 1 + Math.min(state.streak, 5);
+    state.correctCount += 1;
+    const basePts = 1 + Math.min(state.streak, 5);
+    const mult = getScoreRewardMultiplier();
+    state.score += Math.max(1, Math.round(basePts * mult));
     state.streak += 1;
+    state.streakMax = Math.max(state.streakMax, state.streak);
     state.energy = Math.min(ENERGY_MAX, state.energy + GAIN_CORRECT);
     updateEnergyBar();
+    pulseEnergyFill("up");
+    pulseTargetArea("ok");
+    playSfxKeyCorrect();
     paintKeys(state.expected, k, true);
 
     if ((state.mode === "word" || state.mode === "bopomofo_word") && state.pos + 1 < state.chars.length) {
       state.pos += 1;
       state.expected = state.chars[state.pos].toLowerCase();
       if (state.mode === "word") {
-        targetEl.innerHTML = renderProgressText(state.chars, state.pos, true);
+        updateWordMarqueeTypingDisplay();
         hintEl.textContent = `很好！下一個請按：「${state.expected.toUpperCase()}」`;
       } else {
         seqEl.innerHTML = renderProgressText(state.bopSeqChars, state.pos, false);
@@ -504,15 +1396,23 @@ function onKeyDown(ev) {
       }
       paintKeys(state.expected);
     } else {
-      if (state.mode === "word" && state.currentWordEn) {
-        speakWord(state.currentWordEn);
+      if (state.mode === "word" && state.currentWordEn && state.speakWhen === "onComplete") {
+        speakUtterance(state.currentWordEn, "en-US");
       }
-      nextRound();
+      if (state.mode === "word" && wordPool.length) {
+        wordMarqueeAdvanceToNext();
+      } else {
+        nextRound();
+      }
     }
   } else {
+    state.wrongCount += 1;
     state.streak = 0;
     state.energy = Math.max(0, state.energy - PENALTY_WRONG);
     updateEnergyBar();
+    pulseEnergyFill("down");
+    pulseTargetArea("bad");
+    playSfxKeyWrong();
     if (state.mode === "bopomofo" || state.mode === "bopomofo_word") {
       const symbol = state.chars[0] ?? "?";
       if (state.mode === "bopomofo_word") {
@@ -536,11 +1436,32 @@ skipBtn.addEventListener("click", () => {
   if (state.gameOver) return;
   state.streak = 0;
   updateScore();
-  nextRound();
+  if (state.mode === "word" && wordPool.length && state.nextWordItem) {
+    setKeyboardMode(state.mode);
+    promoteWordMarqueeNextToCurrent({ recordCurrentAsCompleted: false });
+  } else {
+    nextRound();
+  }
+});
+
+speakCurrentBtn.addEventListener("click", () => {
+  speakCurrentQuestion();
 });
 
 playAgainBtn.addEventListener("click", () => {
   startNewRun();
+});
+
+openScoreboardBtn?.addEventListener("click", () => {
+  openScoreboardPanel();
+});
+
+scoreboardCloseBtn?.addEventListener("click", () => {
+  closeScoreboardPanel();
+});
+
+scoreboardModeSelectEl?.addEventListener("change", () => {
+  renderGameOverScoreboard(null, scoreboardModeSelectEl.value);
 });
 
 modeInputs.forEach((input) => {
@@ -560,10 +1481,56 @@ function onShowKeyboardToggle() {
 keyboardToggleEl.addEventListener("input", onShowKeyboardToggle);
 keyboardToggleEl.addEventListener("change", onShowKeyboardToggle);
 
-speakToggleEl.addEventListener("change", () => {
-  state.speakEnabled = !!speakToggleEl.checked;
+function onKeySfxToggle() {
+  if (!keySfxToggleEl) return;
+  const next = !!keySfxToggleEl.checked;
+  if (next === state.sfxKeyEnabled) return;
+  state.sfxKeyEnabled = next;
   savePrefs();
-});
+  if (next) {
+    const ctx = getSfxAudioContext();
+    resumeSfxContext(ctx);
+  }
+}
+keySfxToggleEl?.addEventListener("input", onKeySfxToggle);
+keySfxToggleEl?.addEventListener("change", onKeySfxToggle);
+
+function syncSpeakWhenFromState() {
+  const autoOn = state.speakWhen !== "off";
+  speakAutoToggleEl.checked = autoOn;
+  speakWhenSelectEl.disabled = !autoOn;
+  if (autoOn) {
+    const v = state.speakWhen === "onQuestion" || state.speakWhen === "onComplete" ? state.speakWhen : "onComplete";
+    speakWhenSelectEl.value = v;
+  }
+}
+
+function onSpeakAutoToggle() {
+  if (speakAutoToggleEl.checked) {
+    speakWhenSelectEl.disabled = false;
+    const v = speakWhenSelectEl.value === "onQuestion" || speakWhenSelectEl.value === "onComplete"
+      ? speakWhenSelectEl.value
+      : "onComplete";
+    speakWhenSelectEl.value = v;
+    state.speakWhen = v;
+  } else {
+    state.speakWhen = "off";
+    speakWhenSelectEl.disabled = true;
+  }
+  savePrefs();
+}
+
+function onSpeakWhenSelectChange() {
+  if (!speakAutoToggleEl.checked) return;
+  const v = speakWhenSelectEl.value;
+  if (v !== "onQuestion" && v !== "onComplete") return;
+  state.speakWhen = v;
+  savePrefs();
+}
+
+speakAutoToggleEl.addEventListener("input", onSpeakAutoToggle);
+speakAutoToggleEl.addEventListener("change", onSpeakAutoToggle);
+speakWhenSelectEl.addEventListener("change", onSpeakWhenSelectChange);
 
 speakRateEl.addEventListener("change", () => {
   const v = Number(speakRateEl.value);
@@ -581,6 +1548,7 @@ function onDrainPerSecAdjust() {
   state.drainPerSec = clampDrainPerSec(drainPerSecEl.value);
   syncDrainPerSecInput();
   state.lastEnergyTs = performance.now();
+  updateScore();
   savePrefs();
 }
 
@@ -594,12 +1562,24 @@ modeInputs.forEach((el) => {
   el.checked = el.value === state.mode;
 });
 keyboardToggleEl.checked = state.showKeyboard;
-speakToggleEl.checked = state.speakEnabled;
+if (keySfxToggleEl) keySfxToggleEl.checked = state.sfxKeyEnabled;
+syncSpeakWhenFromState();
 speakRateEl.value = String(state.speakRate);
 syncDrainPerSecInput();
+updateScore();
+
+if (wordTopicDetailsEl) {
+  wordTopicDetailsEl.open = state.wordTopicPanelOpen;
+  wordTopicDetailsEl.addEventListener("toggle", () => {
+    state.wordTopicPanelOpen = wordTopicDetailsEl.open;
+    savePrefs();
+  });
+}
+updateWordTopicSectionVisibility();
 
 async function boot() {
   await loadVocabulary();
+  buildWordTopicBar();
   buildKeyboard();
   applyKeyboardVisibility();
   state.energy = ENERGY_MAX;
