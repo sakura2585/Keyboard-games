@@ -1,0 +1,2 @@
+# Python 內建 tkinter，Windows 官方安裝版通常可直接用。
+# 若啟動報沒有 tkinter，請安裝含 Tcl/Tk 的 Python 或參考專案 README。

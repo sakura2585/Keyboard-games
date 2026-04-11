@@ -1,0 +1,246 @@
+:root {
+  --bg: #f7f9fc;
+  --card: #ffffff;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --key-default: #f8f8f8;
+  --key-target: #ffd75e;
+  --key-ok: #7ddc8a;
+  --key-bad: #ff8a8a;
+  /* ANSI 類實體鍵盤：鍵寬 + 間距為一階 u；列錯位 0.5u / 1u / 1.5u */
+  --key-w: 42px;
+  --key-h: 38px;
+  --key-gap: 6px;
+  --kbd-u: calc(var(--key-w) + var(--key-gap));
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Noto Sans TC", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+.wrap {
+  position: relative;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 16px;
+}
+.energyWrap {
+  margin-top: 10px;
+}
+.energyTrack {
+  height: 14px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+}
+.energyFill {
+  height: 100%;
+  width: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0d9488, #14b8a6);
+  transition: width 0.08s linear, background 0.2s ease;
+}
+.energyFill.energy-low {
+  background: linear-gradient(90deg, #ea580c, #f97316);
+}
+.energyFill.energy-critical {
+  background: linear-gradient(90deg, #dc2626, #ef4444);
+}
+.game-over-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  border-radius: 12px;
+  padding: 16px;
+}
+.game-over-overlay[hidden] {
+  display: none !important;
+}
+.game-over-card {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 28px 32px;
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15);
+  max-width: 360px;
+  width: 100%;
+}
+.game-over-title {
+  margin: 0 0 12px;
+  font-size: 22px;
+}
+.game-over-score {
+  margin: 0 0 20px;
+  font-size: 20px;
+  font-weight: 700;
+}
+.game-over-btn {
+  border: 0;
+  background: #2563eb;
+  color: #fff;
+  border-radius: 10px;
+  padding: 12px 24px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.game-over-btn:hover {
+  background: #1d4ed8;
+}
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.topbar h1 { margin: 0; font-size: 24px; }
+#score { font-weight: 700; }
+.modes {
+  margin-top: 12px;
+  background: var(--card);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.modes label { cursor: pointer; }
+.rateWrap select,
+.rateWrap input[type="number"] {
+  margin-left: 4px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  padding: 3px 6px;
+  width: 4.5em;
+}
+#skipBtn {
+  margin-left: auto;
+  border: 0;
+  background: #2563eb;
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.targetArea {
+  margin-top: 12px;
+  background: var(--card);
+  border-radius: 12px;
+  padding: 18px;
+  text-align: center;
+}
+.target {
+  font-size: 92px;
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: 2px;
+  min-height: 100px;
+}
+.target .done {
+  color: #16a34a;
+}
+.target .pending {
+  color: #1f2937;
+}
+.translate {
+  margin: 8px 0 0;
+  min-height: 52px;
+  font-size: 40px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: #0f766e;
+}
+.hint { margin: 10px 0 4px; font-size: 20px; }
+.seq {
+  margin: 2px 0 6px;
+  min-height: 24px;
+  font-size: 22px;
+  letter-spacing: 3px;
+}
+.seq .done { color: #16a34a; }
+.seq .pending { color: #334155; }
+.tip { margin: 0; color: var(--muted); }
+.kbd {
+  margin: 12px auto 0;
+  background: var(--card);
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+  justify-content: center;
+}
+/* 關閉模擬鍵盤時立即不佔位（避免與 display:grid 疊加時延遲重排） */
+.kbd[hidden] {
+  display: none !important;
+}
+.kbd-row {
+  display: flex;
+  align-items: center;
+  gap: var(--key-gap);
+}
+.kbd-row.offset-1 { margin-left: calc(0.5 * var(--kbd-u)); }
+.kbd-row.offset-2 { margin-left: calc(1 * var(--kbd-u)); }
+.kbd-row.offset-3 { margin-left: calc(1.5 * var(--kbd-u)); }
+.key {
+  width: var(--key-w);
+  height: var(--key-h);
+  background: var(--key-default);
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.1;
+  user-select: none;
+  overflow: hidden;
+}
+.key .main {
+  display: block;
+}
+.key .sub {
+  display: block;
+  font-size: 11px;
+  color: #4b5563;
+  margin-top: 1px;
+  min-height: 11px;
+}
+.key.key-target { background: var(--key-target); }
+.key.key-ok { background: var(--key-ok); }
+.key.key-bad { background: var(--key-bad); }
+/* 底列與數字列同寬；左右約 1.25u 模擬修飾鍵區，中間長空白鍵 */
+.kbd-row-space {
+  width: calc(13 * var(--key-w) + 12 * var(--key-gap));
+  justify-content: flex-start;
+}
+.kbd-spacer {
+  flex: 0 0 calc(1.25 * var(--kbd-u));
+  align-self: stretch;
+  min-height: var(--key-h);
+  pointer-events: none;
+}
+.key.key-space {
+  flex: 1 1 calc(6 * var(--key-w) + 5 * var(--key-gap));
+  width: auto;
+  min-width: calc(4 * var(--key-w) + 3 * var(--key-gap));
+}
+@media (max-width: 720px) {
+  :root {
+    --key-w: 36px;
+    --key-h: 34px;
+  }
+  .target { font-size: 64px; }
+  .hint { font-size: 18px; }
+  .key { font-size: 12px; }
+}

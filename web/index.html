@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>鍵盤小遊戲（Web）</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="topbar">
+      <h1>鍵盤小遊戲（Web）</h1>
+      <div id="score">分數：0　連續：0</div>
+    </header>
+
+    <div class="energyWrap" aria-label="能量">
+      <div class="energyTrack">
+        <div id="energyFill" class="energyFill"></div>
+      </div>
+    </div>
+
+    <div id="gameOverOverlay" class="game-over-overlay" hidden>
+      <div class="game-over-card">
+        <h2 class="game-over-title">本局結束</h2>
+        <p id="gameOverFinalScore" class="game-over-score">最終分數：0</p>
+        <button type="button" id="playAgainBtn" class="game-over-btn">再玩一局</button>
+      </div>
+    </div>
+
+    <section class="modes">
+      <label><input type="radio" name="mode" value="letter" checked> 英數單鍵</label>
+      <label><input type="radio" name="mode" value="english"> 純英文</label>
+      <label><input type="radio" name="mode" value="word"> 簡單英文單字</label>
+      <label><input type="radio" name="mode" value="bopomofo"> 注音模式</label>
+      <label><input type="radio" name="mode" value="bopomofo_word"> 注音拼字</label>
+      <label><input id="keyboardToggle" type="checkbox" checked> 顯示模擬鍵盤</label>
+      <label><input id="speakToggle" type="checkbox" checked> 完成發音</label>
+      <label class="rateWrap">語速
+        <select id="speakRate">
+          <option value="0.85">慢</option>
+          <option value="1" selected>正常</option>
+          <option value="1.15">快</option>
+        </select>
+      </label>
+      <label class="rateWrap">能量遞減（點/秒）
+        <input type="number" id="drainPerSec" min="1" max="30" step="1" value="8"
+          title="每秒扣除的能量點數，數字愈大愈難" />
+      </label>
+      <button id="skipBtn" type="button">下一題（跳過）</button>
+    </section>
+
+    <section class="targetArea">
+      <div id="target" class="target">A</div>
+      <p id="translate" class="translate"></p>
+      <p id="hint" class="hint">請看上面，按下鍵盤對應鍵</p>
+      <p id="seq" class="seq"></p>
+      <p class="tip">黃色=現在要按　綠色=剛剛按對　紅色=剛剛按錯</p>
+    </section>
+
+    <section id="keyboard" class="kbd"></section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
