@@ -99,10 +99,7 @@
             <option value="1.15">快</option>
           </select>
         </label>
-        <label class="rateWrap rateWrap--drain">起始難度（點/秒）
-          <input type="number" id="drainPerSec" min="1" max="40" step="1" value="8"
-            title="已改為依 LV 遞減能量；此設定保留供日後擴充，目前不影響能量遞減。" />
-        </label>
+        <input type="hidden" id="drainPerSec" value="1" aria-hidden="true" />
         <div class="modes-actions">
           <button type="button" id="speakCurrentBtn" class="speak-current-btn">發音（目前題目）</button>
           <button id="skipBtn" type="button">下一題（跳過）</button>
@@ -151,6 +148,6 @@
   </main>
 
   <script src="./data/vocabulary.js"></script>
-  <script src="./app.js"></script>
+  <script src="./app.js?v=lv-drain-1"></script>
 </body>
 </html>

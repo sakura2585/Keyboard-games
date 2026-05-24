@@ -89,14 +89,20 @@ function clampDrainPerSec(n) {
   return Math.min(DRAIN_PER_SEC_MAX, Math.max(DRAIN_PER_SEC_MIN, x));
 }
 
-/** 目前每秒能量遞減 = 當前 LV（maxLevelAchieved） */
-function getDrainPerSec() {
-  return getDifficultyLv();
+/** 本局當前等級（= 能量每秒遞減；答錯不降、重玩回 1） */
+function getCurrentLevel() {
+  const lv = Number(state.maxLevelAchieved);
+  if (!Number.isFinite(lv)) return DRAIN_PER_SEC_MIN;
+  return Math.min(DRAIN_PER_SEC_MAX, Math.max(DRAIN_PER_SEC_MIN, Math.round(lv)));
 }
 
-/** 與畫面 LV 共用：達到的最高等級（只升不降） */
+/** @deprecated 請用 getCurrentLevel；保留別名避免漏改 */
+function getDrainPerSec() {
+  return getCurrentLevel();
+}
+
 function getDifficultyLv() {
-  return state.maxLevelAchieved;
+  return getCurrentLevel();
 }
 
 /** 依最高等級線性放大答對得分；錯誤仍不扣分 */
@@ -690,8 +696,8 @@ function syncLvWrapVisibility() {
 }
 
 function updateScore() {
-  const drain = getDrainPerSec();
-  const lv = getDifficultyLv();
+  const lv = getCurrentLevel();
+  const drain = lv;
   const sv = document.getElementById("scoreValue");
   const stv = document.getElementById("streakValue");
   const lvv = document.getElementById("lvValue");
@@ -815,7 +821,8 @@ function energyTick(now) {
   ) {
     const dt = Math.min(1.5, Math.max(0, (now - state.lastEnergyTs) / 1000));
     state.lastEnergyTs = now;
-    state.energy = Math.max(0, state.energy - getDrainPerSec() * dt);
+    const drainRate = getCurrentLevel();
+    state.energy = Math.max(0, state.energy - drainRate * dt);
     updateEnergyBar();
     if (state.energy <= 0) endRun();
   } else {
