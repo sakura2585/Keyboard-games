@@ -20,10 +20,10 @@
             rel="noopener noreferrer"
           >回報與建議</a>
         </div>
-        <div id="score" class="topbar-score-line" title="遞減為目前每秒能量遞減（含連擊加成後）；簡單英文單字模式的 LV 在跑馬中欄原「目前」處">
+        <div id="score" class="topbar-score-line" title="遞減為目前每秒能量遞減，與 LV 相同；簡單英文單字模式的 LV 在跑馬中欄原「目前」處">
           <span class="topbar-score-seg">分數：<strong id="scoreValue">0</strong></span>
           <span class="topbar-score-seg">連續：<strong id="streakValue">0</strong></span>
-          <span class="topbar-score-seg">遞減：<strong id="drainValue">8</strong>/秒</span>
+          <span class="topbar-score-seg">遞減：<strong id="drainValue">1</strong>/秒</span>
         </div>
       </div>
     </header>
@@ -101,7 +101,7 @@
         </label>
         <label class="rateWrap rateWrap--drain">起始難度（點/秒）
           <input type="number" id="drainPerSec" min="1" max="40" step="1" value="8"
-            title="本局開局時每秒能量遞減；連續按對每 36 鍵再 +1/秒（含起始加成上限 40/秒）。難度越高答對分數倍率越高。" />
+            title="已改為依 LV 遞減能量；此設定保留供日後擴充，目前不影響能量遞減。" />
         </label>
         <div class="modes-actions">
           <button type="button" id="speakCurrentBtn" class="speak-current-btn">發音（目前題目）</button>
@@ -127,9 +127,9 @@
     </div>
 
     <section class="targetArea" id="targetArea">
-      <div id="targetLvWrap" class="target-lv" aria-live="polite" title="LV：目前每秒遞減；升級倒數：再幾次答對後每秒遞減+1">
+      <div id="targetLvWrap" class="target-lv" aria-live="polite" title="LV：目前每秒能量遞減；升級倒數：再連續答對幾次升 1 級">
         <div class="target-lv-row">
-          <span class="target-lv-part">LV:<strong id="lvValue">8</strong></span>
+          <span class="target-lv-part">LV:<strong id="lvValue">1</strong></span>
           <span class="target-lv-part target-lv-countdown">升級倒數:<strong id="upgradeCountdownValue">—</strong></span>
         </div>
       </div>

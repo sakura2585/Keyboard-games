@@ -89,9 +89,9 @@ function clampDrainPerSec(n) {
   return Math.min(DRAIN_PER_SEC_MAX, Math.max(DRAIN_PER_SEC_MIN, x));
 }
 
+/** 目前每秒能量遞減 = 當前 LV（maxLevelAchieved） */
 function getDrainPerSec() {
-  const streakBonus = Math.floor(state.streak / STREAK_HITS_PER_DRAIN_PLUS_ONE);
-  return Math.min(DRAIN_PER_SEC_MAX, state.drainPerSec + streakBonus);
+  return getDifficultyLv();
 }
 
 /** 與畫面 LV 共用：達到的最高等級（只升不降） */
@@ -1304,7 +1304,7 @@ function renderWordMarqueePanes() {
   if (imgUrl) {
     requestAnimationFrame(() => bindWordMarqueeImgFallback());
   }
-  wordMarqueePaneCurrentEl.innerHTML = `<span class="word-marquee-label word-marquee-lv-label" title="LV：目前每秒遞減；升級倒數：再幾次答對後每秒遞減+1（已封頂顯示 —）"><span class="word-marquee-lv-part">LV:<strong id="lvValueMarquee"></strong></span><span class="word-marquee-lv-part word-marquee-lv-countdown">升級倒數:<strong id="upgradeCountdownMarquee"></strong></span></span><div class="word-marquee-en">${renderProgressText(state.chars, state.pos, true)}</div><div class="word-marquee-zh">${escapeHtml(state.currentWordZh)}</div>`;
+  wordMarqueePaneCurrentEl.innerHTML = `<span class="word-marquee-label word-marquee-lv-label" title="LV：目前每秒能量遞減；升級倒數：再連續答對幾次升 1 級（已封頂顯示 —）"><span class="word-marquee-lv-part">LV:<strong id="lvValueMarquee"></strong></span><span class="word-marquee-lv-part word-marquee-lv-countdown">升級倒數:<strong id="upgradeCountdownMarquee"></strong></span></span><div class="word-marquee-en">${renderProgressText(state.chars, state.pos, true)}</div><div class="word-marquee-zh">${escapeHtml(state.currentWordZh)}</div>`;
   wordMarqueePaneNextEl.innerHTML = renderWordMarqueeNextHtml(state.nextWordItem);
   updateScore();
 }
