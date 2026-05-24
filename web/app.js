@@ -111,24 +111,12 @@ function getScoreRewardMultiplier() {
 }
 
 /**
- * 再幾次「答對」後，每秒遞減會實際 +1（連擊跨過下一個門檻且未封頂）。
- * 若已無法再升則回傳 null。
+ * 再幾次「連續答對」後升 1 級（每 36 次一級；已封頂則 null）。
  */
 function getUpgradeCountdownRemaining() {
-  const h = STREAK_HITS_PER_DRAIN_PLUS_ONE;
-  const currentLevel = state.maxLevelAchieved;
-  
-  // 如果已經達到最高等級，則無法再升級
-  if (currentLevel >= DRAIN_PER_SEC_MAX) {
-    return null;
-  }
-  
-  // 計算下一級需要的連續次數
-  const currentStreakLevel = Math.floor(state.streak / h);
-  const nextStreakLevel = currentStreakLevel + 1;
-  const nextBoundary = nextStreakLevel * h;
-  
-  return nextBoundary - state.streak;
+  if (state.maxLevelAchieved >= DRAIN_PER_SEC_MAX) return null;
+  const rem = state.streak % STREAK_HITS_PER_DRAIN_PLUS_ONE;
+  return rem === 0 ? STREAK_HITS_PER_DRAIN_PLUS_ONE : STREAK_HITS_PER_DRAIN_PLUS_ONE - rem;
 }
 
 function formatUpgradeCountdown() {
@@ -1500,11 +1488,14 @@ function onKeyDown(ev) {
     state.score += Math.max(1, Math.round(basePts * mult));
     state.streak += 1;
     state.streakMax = Math.max(state.streakMax, state.streak);
-    // 更新最高等級：連續正確時提升等級，錯誤不降級
-    // 基於連續次數計算等級，從1開始，每36次連續+1級
-    const streakBasedLevel = DRAIN_PER_SEC_MIN + Math.floor(state.streak / STREAK_HITS_PER_DRAIN_PLUS_ONE);
-    const cappedLevel = Math.min(DRAIN_PER_SEC_MAX, streakBasedLevel);
-    state.maxLevelAchieved = Math.max(state.maxLevelAchieved, cappedLevel);
+    // 每連續答對 36 次升 1 級；答錯不降級（streak 歸零後再累積 36 次再升）
+    if (
+      state.streak > 0 &&
+      state.streak % STREAK_HITS_PER_DRAIN_PLUS_ONE === 0 &&
+      state.maxLevelAchieved < DRAIN_PER_SEC_MAX
+    ) {
+      state.maxLevelAchieved += 1;
+    }
     state.energy = Math.min(ENERGY_MAX, state.energy + GAIN_CORRECT);
     updateEnergyBar();
     pulseEnergyFill("up");
