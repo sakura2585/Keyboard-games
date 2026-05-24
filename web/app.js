@@ -94,14 +94,14 @@ function getDrainPerSec() {
   return Math.min(DRAIN_PER_SEC_MAX, state.drainPerSec + streakBonus);
 }
 
-/** 與畫面 LV、分數倍率共用：目前「每秒遞減」整數（含連擊加成後封頂） */
+/** 與畫面 LV 共用：達到的最高等級（只升不降） */
 function getDifficultyLv() {
-  return getDrainPerSec();
+  return state.maxLevelAchieved;
 }
 
-/** 依目前難度（即時每秒遞減）線性放大答對得分；錯誤仍不扣分 */
+/** 依最高等級線性放大答對得分；錯誤仍不扣分 */
 function getScoreRewardMultiplier() {
-  const d = getDrainPerSec();
+  const d = getDifficultyLv();
   const lo = DRAIN_PER_SEC_MIN;
   const hi = DRAIN_PER_SEC_MAX;
   const span = hi - lo;
@@ -115,23 +115,20 @@ function getScoreRewardMultiplier() {
  * 若已無法再升則回傳 null。
  */
 function getUpgradeCountdownRemaining() {
-  const base = state.drainPerSec;
   const h = STREAK_HITS_PER_DRAIN_PLUS_ONE;
-  const cur = getDrainPerSec();
-  const curBonus = Math.floor(state.streak / h);
-  let k = curBonus + 1;
-  for (let guard = 0; guard < 200; guard++) {
-    const drainAfter = Math.min(DRAIN_PER_SEC_MAX, base + k);
-    if (drainAfter > cur) {
-      const nextBoundary = k * h;
-      return nextBoundary - state.streak;
-    }
-    if (drainAfter >= DRAIN_PER_SEC_MAX && cur >= DRAIN_PER_SEC_MAX) {
-      return null;
-    }
-    k++;
+  const currentLevel = state.maxLevelAchieved;
+  
+  // 如果已經達到最高等級，則無法再升級
+  if (currentLevel >= DRAIN_PER_SEC_MAX) {
+    return null;
   }
-  return null;
+  
+  // 計算下一級需要的連續次數
+  const currentStreakLevel = Math.floor(state.streak / h);
+  const nextStreakLevel = currentStreakLevel + 1;
+  const nextBoundary = nextStreakLevel * h;
+  
+  return nextBoundary - state.streak;
 }
 
 function formatUpgradeCountdown() {
@@ -261,6 +258,8 @@ const state = {
   energyDrainStarted: false,
   /** 起始難度：每秒能量遞減基準（1–30），連續命中可再加成 */
   drainPerSec: DRAIN_PER_SEC_DEFAULT,
+  /** 本局達到的最高等級（只升不降） */
+  maxLevelAchieved: DRAIN_PER_SEC_MIN,
   /** 英文單字：預覽的下一題（含 topic、img 等） */
   nextWordItem: null,
   /** 英文單字：剛完成的上一題（左欄無圖時顯示「已完成」） */
@@ -546,7 +545,7 @@ function playSfxKeyCorrect() {
   if (!ctx) return;
   resumeSfxContext(ctx);
   const t0 = ctx.currentTime;
-  sfxPlayTone(ctx, 880, t0, 0.042, "sine", 0.065);
+  sfxPlayTone(ctx, 880, t0, 0.042, "sine", 0.15); // 增大音量從 0.065 到 0.15
 }
 
 /** 單鍵答錯：兩段略降調 */
@@ -557,8 +556,8 @@ function playSfxKeyWrong() {
   if (!ctx) return;
   resumeSfxContext(ctx);
   const t0 = ctx.currentTime;
-  sfxPlayTone(ctx, 200, t0, 0.055, "triangle", 0.06);
-  sfxPlayTone(ctx, 145, t0 + 0.048, 0.075, "triangle", 0.05);
+  sfxPlayTone(ctx, 200, t0, 0.055, "triangle", 0.12); // 增大音量從 0.06 到 0.12
+  sfxPlayTone(ctx, 145, t0 + 0.048, 0.075, "triangle", 0.10); // 增大音量從 0.05 到 0.10
 }
 
 function formatScoreWhen(ts) {
@@ -768,6 +767,8 @@ function beginFreshRun() {
   state.correctCount = 0;
   state.wrongCount = 0;
   state.streakMax = 0;
+  // 重置最高等級為 1 級（不論起始難度設定）
+  state.maxLevelAchieved = DRAIN_PER_SEC_MIN;
   updateScore();
   updateEnergyBar();
   applyGameOverEndedLayout();
@@ -1142,23 +1143,83 @@ function buildWordTopicBar() {
   syncWordTopicButtonStyles();
 }
 
-async function loadVocabulary() {
-  const fbW = normalizeWordPoolEntries(DEFAULT_WORD_POOL.map((o) => ({ ...o })));
-  const fbB = DEFAULT_BOPOMOFO_WORD_POOL.map((o) => ({ ...o }));
+function loadVocabViaScriptTag() {
+  return new Promise((resolve, reject) => {
+    if (window.__KEYBOARD_GAME_VOCAB__) {
+      resolve(window.__KEYBOARD_GAME_VOCAB__);
+      return;
+    }
+    const existing = document.querySelector('script[data-vocab-loader="1"]');
+    if (existing) {
+      existing.addEventListener("load", () => {
+        if (window.__KEYBOARD_GAME_VOCAB__) resolve(window.__KEYBOARD_GAME_VOCAB__);
+        else reject(new Error("empty"));
+      });
+      existing.addEventListener("error", () => reject(new Error("fail")));
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = "data/vocabulary.js";
+    s.dataset.vocabLoader = "1";
+    s.onload = () => {
+      if (window.__KEYBOARD_GAME_VOCAB__) resolve(window.__KEYBOARD_GAME_VOCAB__);
+      else reject(new Error("empty"));
+    };
+    s.onerror = () => reject(new Error("fail"));
+    document.head.appendChild(s);
+  });
+}
+
+async function loadVocabJsonData() {
   try {
     const res = await fetch("data/vocabulary.json", { cache: "no-store" });
     if (!res.ok) throw new Error(String(res.status));
-    const data = await res.json();
+    return await res.json();
+  } catch (_) {
+    if (window.__KEYBOARD_GAME_VOCAB__) return window.__KEYBOARD_GAME_VOCAB__;
+    return loadVocabViaScriptTag();
+  }
+}
+
+function applyVocabLoadWarning(usedFallback) {
+  let el = document.getElementById("vocabLoadWarn");
+  if (!el) {
+    el = document.createElement("p");
+    el.id = "vocabLoadWarn";
+    el.className = "vocab-load-warn";
+    el.setAttribute("role", "status");
+    const anchor = document.querySelector(".modes");
+    if (anchor) anchor.insertAdjacentElement("beforebegin", el);
+  }
+  if (usedFallback) {
+    el.hidden = false;
+    el.textContent =
+      "辭彙庫載入失敗，目前僅使用內建少數單字（種類標籤會不完整）。請在 web 目錄執行 python -m http.server 8000，再以 http://localhost:8000 開啟；或直接雙擊 index.html 並確認 data/vocabulary.js 存在。";
+  } else {
+    el.hidden = true;
+    el.textContent = "";
+  }
+}
+
+async function loadVocabulary() {
+  const fbW = normalizeWordPoolEntries(DEFAULT_WORD_POOL.map((o) => ({ ...o })));
+  const fbB = DEFAULT_BOPOMOFO_WORD_POOL.map((o) => ({ ...o }));
+  let usedFallback = false;
+  try {
+    const data = await loadVocabJsonData();
     const w = normalizeWordPoolEntries(data.wordPool);
     const b = normalizeBopomofoWordPoolEntries(data.bopomofoWordPool);
     wordPoolFull = w.length ? w : fbW;
+    usedFallback = !w.length;
     finishWordTopicHydration();
     bopomofoWordPool = b.length ? b : fbB;
   } catch (_) {
     wordPoolFull = fbW;
+    usedFallback = true;
     finishWordTopicHydration();
     bopomofoWordPool = fbB;
   }
+  applyVocabLoadWarning(usedFallback);
 }
 
 function renderProgressText(chars, pos, upper = false) {
@@ -1439,6 +1500,11 @@ function onKeyDown(ev) {
     state.score += Math.max(1, Math.round(basePts * mult));
     state.streak += 1;
     state.streakMax = Math.max(state.streakMax, state.streak);
+    // 更新最高等級：連續正確時提升等級，錯誤不降級
+    // 基於連續次數計算等級，從1開始，每36次連續+1級
+    const streakBasedLevel = DRAIN_PER_SEC_MIN + Math.floor(state.streak / STREAK_HITS_PER_DRAIN_PLUS_ONE);
+    const cappedLevel = Math.min(DRAIN_PER_SEC_MAX, streakBasedLevel);
+    state.maxLevelAchieved = Math.max(state.maxLevelAchieved, cappedLevel);
     state.energy = Math.min(ENERGY_MAX, state.energy + GAIN_CORRECT);
     updateEnergyBar();
     pulseEnergyFill("up");

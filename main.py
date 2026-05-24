@@ -13,6 +13,13 @@ from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Any, Dict, List
 
+try:
+    import pygame
+    PYGAME_AVAILABLE = True
+except ImportError:
+    PYGAME_AVAILABLE = False
+    print("pygame 未安裝，音效功能將被禁用。安裝方法：pip install pygame")
+
 STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
 STATE_PATH = os.path.join(STATE_DIR, "app_state.json")
 DEFAULT_GEOMETRY = "720x480"
@@ -218,6 +225,7 @@ class TypingGameApp:
 
         self.score = 0
         self.streak = 0
+        self.level = 1  # 新增：等級系統
         self._difficulty = str(self._state.get("difficulty", "letter"))
         self._mode_var = tk.StringVar(value=self._difficulty)
         self._target_chars: List[str] = []
@@ -228,11 +236,120 @@ class TypingGameApp:
 
         self.big_font = tkfont.Font(family="Segoe UI", size=72, weight="bold")
         self.hint_font = tkfont.Font(family="Segoe UI", size=16)
+        
+        # 初始化音效系統
+        self._init_sound_system()
 
         self._build_ui()
         self._new_round()
         self.root.bind("<KeyPress>", self._on_key)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _init_sound_system(self) -> None:
+        """初始化音效系統"""
+        self.sound_enabled = PYGAME_AVAILABLE
+        if not self.sound_enabled:
+            return
+        
+        try:
+            pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
+            pygame.mixer.init()
+            self._generate_sound_effects()
+        except Exception as e:
+            print(f"音效系統初始化失敗：{e}")
+            self.sound_enabled = False
+
+    def _generate_sound_effects(self) -> None:
+        """產生音效（使用程式生成的音調）"""
+        if not self.sound_enabled:
+            return
+        
+        try:
+            import numpy as np
+            
+            # 音效參數
+            sample_rate = 22050
+            
+            # 正確音效：較高頻率，較大音量
+            duration_correct = 0.15  # 增加音效長度
+            freq_correct = 880  # 高音調
+            t = np.linspace(0, duration_correct, int(sample_rate * duration_correct))
+            wave_correct = np.sin(2 * np.pi * freq_correct * t)
+            
+            # 增大音量（原來可能太小）
+            volume_multiplier = 0.3  # 增加音量
+            wave_correct = (wave_correct * volume_multiplier * 32767).astype(np.int16)
+            
+            # 立體聲
+            stereo_correct = np.array([wave_correct, wave_correct]).T
+            self.sound_correct = pygame.sndarray.make_sound(stereo_correct)
+            
+            # 錯誤音效：較低頻率
+            duration_wrong = 0.2
+            freq_wrong = 220  # 低音調
+            t2 = np.linspace(0, duration_wrong, int(sample_rate * duration_wrong))
+            wave_wrong = np.sin(2 * np.pi * freq_wrong * t2)
+            wave_wrong = (wave_wrong * volume_multiplier * 32767).astype(np.int16)
+            
+            stereo_wrong = np.array([wave_wrong, wave_wrong]).T
+            self.sound_wrong = pygame.sndarray.make_sound(stereo_wrong)
+            
+        except ImportError:
+            print("numpy 未安裝，使用簡化音效。建議安裝：pip install numpy")
+            # 使用 pygame 的基本音調生成
+            self._generate_simple_sounds()
+        except Exception as e:
+            print(f"音效生成失敗：{e}")
+            self.sound_enabled = False
+
+    def _generate_simple_sounds(self) -> None:
+        """生成簡化的音效（不依賴 numpy）"""
+        try:
+            # 創建簡單的音調
+            sample_rate = 22050
+            duration = 0.15
+            
+            # 手動創建正弦波
+            import math
+            samples = int(sample_rate * duration)
+            wave_data = []
+            
+            # 正確音效
+            for i in range(samples):
+                t = i / sample_rate
+                sample = int(0.3 * 32767 * math.sin(2 * math.pi * 880 * t))
+                wave_data.append([sample, sample])  # 立體聲
+            
+            self.sound_correct = pygame.sndarray.make_sound(wave_data)
+            
+            # 錯誤音效
+            wave_data2 = []
+            for i in range(samples):
+                t = i / sample_rate
+                sample = int(0.3 * 32767 * math.sin(2 * math.pi * 220 * t))
+                wave_data2.append([sample, sample])
+            
+            self.sound_wrong = pygame.sndarray.make_sound(wave_data2)
+            
+        except Exception as e:
+            print(f"簡化音效生成失敗：{e}")
+            self.sound_enabled = False
+
+    def _play_sound_correct(self) -> None:
+        """播放正確音效"""
+        if self.sound_enabled and hasattr(self, 'sound_correct'):
+            try:
+                self.sound_correct.play()
+            except Exception:
+                pass
+
+    def _play_sound_wrong(self) -> None:
+        """播放錯誤音效"""
+        if self.sound_enabled and hasattr(self, 'sound_wrong'):
+            try:
+                self.sound_wrong.play()
+            except Exception:
+                pass
 
     def _build_ui(self) -> None:
         top = ttk.Frame(self.root, padding=8)
@@ -267,7 +384,7 @@ class TypingGameApp:
             command=self._on_mode_change,
         ).pack(side=tk.LEFT, padx=4)
 
-        self.lbl_score = ttk.Label(top, text="分數：0　連續：0")
+        self.lbl_score = ttk.Label(top, text="分數：0　連續：0　等級：1")
         self.lbl_score.pack(side=tk.RIGHT)
 
         body = ttk.Frame(self.root, padding=16)
@@ -411,8 +528,25 @@ class TypingGameApp:
         self._update_keyboard_feedback(self._expected)
 
     def _skip(self) -> None:
-        self.streak = 0
+        self.streak = 0  # 跳過也會重置連續，但不影響等級
         self._new_round()
+        # 更新顯示
+        self.lbl_score.configure(text=f"分數：{self.score}　連續：{self.streak}　等級：{self.level}")
+
+    def _calculate_level_from_streak(self) -> int:
+        """根據連續正確次數計算等級"""
+        if self.streak < 5:
+            return 1
+        elif self.streak < 10:
+            return 2
+        elif self.streak < 20:
+            return 3
+        elif self.streak < 35:
+            return 4
+        elif self.streak < 50:
+            return 5
+        else:
+            return min(6 + (self.streak - 50) // 20, 10)  # 最高等級 10
 
     def _on_key(self, event: tk.Event) -> None:
         if not self._expected:
@@ -422,8 +556,18 @@ class TypingGameApp:
             return
         got = ch.lower()
         if got == self._expected:
+            # 正確輸入
             self.score += 1 + min(self.streak, 5)
             self.streak += 1
+            
+            # 根據連續數更新等級（只升不降）
+            new_level = self._calculate_level_from_streak()
+            if new_level > self.level:
+                self.level = new_level
+            
+            # 播放正確音效
+            self._play_sound_correct()
+            
             self._update_keyboard_feedback(self._expected, got, ok=True)
             if self._difficulty == "word" and self._position + 1 < len(
                 self._target_chars
@@ -439,7 +583,12 @@ class TypingGameApp:
             else:
                 self._new_round()
         else:
+            # 錯誤輸入：連續中斷但等級不降級
             self.streak = 0
+            
+            # 播放錯誤音效
+            self._play_sound_wrong()
+            
             if self._difficulty == "bopomofo":
                 target_symbol = self._target_chars[0] if self._target_chars else "?"
                 key_text = self._expected.upper() if self._expected.isalpha() else self._expected
@@ -451,7 +600,9 @@ class TypingGameApp:
                     text=f"差一點，再試試！需要按的是「{self._expected.upper()}」"
                 )
             self._update_keyboard_feedback(self._expected, got, ok=False)
-        self.lbl_score.configure(text=f"分數：{self.score}　連續：{self.streak}")
+        
+        # 更新顯示（包含等級）
+        self.lbl_score.configure(text=f"分數：{self.score}　連續：{self.streak}　等級：{self.level}")
 
     def _on_close(self) -> None:
         try:

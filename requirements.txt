@@ -1,2 +1,6 @@
 # Python 內建 tkinter，Windows 官方安裝版通常可直接用。
 # 若啟動報沒有 tkinter，請安裝含 Tcl/Tk 的 Python 或參考專案 README。
+
+# 音效功能（可選，但建議安裝以獲得更好體驗）
+pygame>=2.0.0
+numpy>=1.20.0  # 用於更高品質的音效生成（可選）
